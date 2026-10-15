@@ -25,7 +25,7 @@ The full reference, with a visual key for every line and marker, is [`docs/sword
 | **Swordfish Calendar VWAP** (`swordfish-calendar-vwap.m5`) | Weekly, monthly, quarterly and yearly VWAPs with ±1 SD (VAH/VAL), current, previous and older periods, labelled (e.g. `2026 Q1 VAH`) | 30m (W/M) and 4h (Q/Y) candles, Binance + Bybit perps pooled |
 | **Swordfish Rolling VWAP** (`swordfish-rolling-vwap.m5`) | Trailing 7D, 30D and 365D VWAPs | 30m and daily candles, Binance + Bybit perps pooled |
 | **Swordfish Delta Heat** (`swordfish-delta-heat.m5`) | A delta ladder on every candle: net aggressive buying or selling per price row, in dollars, length relative to the candle's largest row, colour against a typical bar | MMT volume snapshots, Binance + Bybit + OKX + Hyperliquid perps |
-| **Swordfish Offside** (`swordfish-offside.m5`) | Failed breakdowns and breakouts, break VWAP and signed flow/counterflow proxies; delta divergences, reaction zones and flow-weighted prices | 5m candles, open interest and liquidations, four perps |
+| **Swordfish Offside** (`swordfish-offside.m5`) | Failed breakdowns and breakouts, measured from individual trades (pressed size, average fill, large prints, reclaim volume) with estimated new and covered positions; delta divergences, reaction zones and flow-weighted prices | Trades (MMT Ultra), 5m candles, open interest and liquidations, four perps |
 | **Swordfish Bar Stats** (`swordfish-bar-stats.m5`) | A table under the chart: long and short liquidations, signed +L and +S flow proxies, volume split with net delta | Open interest, liquidations and candles, four perps |
 
 ### Offside's trap definition
@@ -37,13 +37,22 @@ reclaim holds. On 5m bars, whatever the chart timeframe:
 2. **Break**: a 5m bar trades through it by at least 0.03%.
 3. **Reclaim**: a 5m close back on the original side within 60 minutes.
 4. **Hold** (the trigger): three 5m closes stay on that side without taking the flush extreme.
-5. **Flow context**: positive parts of `NS = (dOI - D) / 2` or `NL = (dOI + D) / 2`, including the reclaim bar. These are signed flow proxies, not counts of new or trapped positions. **Break VWAP**: HLC3 weighted by chart volume. **Stop**: the flush extreme.
-6. **Counterflow**: the opposite-signed proxy after confirmation, shown as an absolute amount. It cannot establish how much of a trapped cohort has closed; it does not end tracking.
+5. **Measured from trades** (MMT Ultra, the last 24 hours by default): the aggressive selling executed below a broken
+   support during the break (or buying above a broken resistance), its volume-weighted average fill, the share in
+   prints of $100k or more, and **reclaim x**, the opposite aggression back on the reclaimed side from the reclaim
+   through the hold divided by the pressed size (workshop 11's reclaim on volume). Trades below 0.05 BTC, 1 ETH or
+   10 SOL are skipped; on Binance that drops about 80% of trades but under 5% of volume. Without trade data a trap
+   falls back to the break VWAP (HLC3 weighted by volume).
+6. **Estimated from candles and OI**: `+S = (dOI - D) / 2` and `+L = (dOI + D) / 2` suggest positions opened or closed
+   but cannot say who. "Est. new" sums the proxy over the break, including the reclaim bar; "est. covered" sums the
+   opposite sign after the hold, and the trap ends "fully unwound (est.)" when it reaches 100%. Measured net flow since
+   the hold is shown beside it. **Stop**: the flush extreme.
 
 Missing or misaligned candles/OI on any selected venue withhold flow readings. A gap during the break makes its total unavailable; a later gap makes counterflow unavailable for that trap. Price-pattern detection continues. Flow-weighted prices reset after a data gap and are not participant entries or P&L.
 
-The marker sits beyond the flush extreme on the bar where the hold completed. The level line and the pain line carry
-short captions ("4h swing low 80,345 | failed breakdown | holding", "break VWAP (not entry)"). The newest trap on each
+The marker sits beyond the flush extreme on the bar where the hold completed; it is larger when the pressed size beats
+the recent average. The level line and the dotted line carry short captions ("4h swing low 80,345 | failed breakdown |
+holding", "sellers' avg fill below level"). The newest trap on each
 side is described at the bottom right; every trap is in the script's "Recent traps" window.
 
 ## Installing in MMT
@@ -79,6 +88,10 @@ side is described at the bottom right; every trap is in the script's "Recent tra
 - MMT keeps per-price volume snapshots for about the last 1,000 bars. The ladder, the reaction zones and the old wick
   markers only exist for that span.
 - Offside's trap detection looks back 5 days of 5m bars. Its 4h swing levels use about 50 days of 4h bars.
+- Offside's trade layer loads the last 24 hours of trades from four perps (about 900,000 trades on BTC at the
+  0.05 BTC minimum). From a cold start that took about 9 minutes before traps appeared; reloads with the trades already
+  loaded take seconds. Lower "Trade history (hours)" to load faster. A minimized or background browser tab loads far
+  slower, and two MMT tabs on the same workspace compete for the load.
 
 ## Checks and backtests
 
