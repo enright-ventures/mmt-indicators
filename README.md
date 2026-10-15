@@ -26,8 +26,8 @@ The full reference, with a visual key for every line and marker, is [`docs/sword
 | **Swordfish Calendar VWAP** (`swordfish-calendar-vwap.m5`) | Weekly, monthly, quarterly and yearly VWAPs with ±1 SD (VAH/VAL), current, previous and older periods, labelled (e.g. `2026 Q1 VAH`) | 30m (W/M) and 4h (Q/Y) candles, Binance + Bybit perps pooled |
 | **Swordfish Rolling VWAP** (`swordfish-rolling-vwap.m5`) | Trailing 7D, 30D and 365D VWAPs | 30m and daily candles, Binance + Bybit perps pooled |
 | **Swordfish Delta Heat** (`swordfish-delta-heat.m5`) | A delta ladder on every candle: net aggressive buying or selling per price row, in dollars, length relative to the candle's largest row, colour against a typical bar | MMT volume snapshots, Binance + Bybit + OKX + Hyperliquid perps |
-| **Swordfish Offside** (`swordfish-offside.m5`) | Trapped traders (failed breakdowns and breakouts at levels that matter), how much of each trap has unwound, the trapped side's pain point; delta divergences, reaction zones, open longs' and shorts' average entries | 5m candles, open interest and liquidations, four perps |
-| **Swordfish Bar Stats** (`swordfish-bar-stats.m5`) | A table under the chart: long and short liquidations, net longs and net shorts opened, volume split with net delta | Open interest, liquidations and candles, four perps |
+| **Swordfish Offside** (`swordfish-offside.m5`) | Failed breakdowns and breakouts, break VWAP and signed flow/counterflow proxies; delta divergences, reaction zones and flow-weighted prices | 5m candles, open interest and liquidations, four perps |
+| **Swordfish Bar Stats** (`swordfish-bar-stats.m5`) | A table under the chart: long and short liquidations, signed +L and +S flow proxies, volume split with net delta | Open interest, liquidations and candles, four perps |
 
 ### Offside's trap definition
 
@@ -38,12 +38,13 @@ reclaim holds. On 5m bars, whatever the chart timeframe:
 2. **Break**: a 5m bar trades through it by at least 0.03%.
 3. **Reclaim**: a 5m close back on the original side within 60 minutes.
 4. **Hold** (the trigger): three 5m closes stay on that side without taking the flush extreme.
-5. **Who is trapped**: new positions opened during the break, `NS = (dOI - D) / 2` for shorts (`NL = (dOI + D) / 2` for
-   longs), plus the other side's liquidations. **Pain point**: the break's VWAP. **Stop**: the flush extreme.
-6. **Fuel**: closing positions after the hold, counted against the trapped size.
+5. **Flow context**: positive parts of `NS = (dOI - D) / 2` or `NL = (dOI + D) / 2`, including the reclaim bar. These are signed flow proxies, not counts of new or trapped positions. **Break VWAP**: HLC3 weighted by chart volume. **Stop**: the flush extreme.
+6. **Counterflow**: the opposite-signed proxy after confirmation, shown as an absolute amount. It cannot establish how much of a trapped cohort has closed; it does not end tracking.
+
+Missing or misaligned candles/OI on any selected venue withhold flow readings. A gap during the break makes its total unavailable; a later gap makes counterflow unavailable for that trap. Price-pattern detection continues. Flow-weighted prices reset after a data gap and are not participant entries or P&L.
 
 The marker sits beyond the flush extreme on the bar where the hold completed. The level line and the pain line carry
-short captions ("4h swing low 80,345 | failed breakdown | holding", "trapped shorts' entry"). The newest trap on each
+short captions ("4h swing low 80,345 | failed breakdown | holding", "break VWAP (not entry)"). The newest trap on each
 side is described at the bottom right; every trap is in the script's "Recent traps" window.
 
 ## Installing in MMT
@@ -74,6 +75,8 @@ side is described at the bottom right; every trap is in the script's "Recent tra
   them.
 - In MMT's stats, `buyLiq` is long liquidations and `sellLiq` is short liquidations. This was checked against
   one-minute returns: −15 bp vs +15 bp.
+- Rolling VWAP uses 335/1,439 closed 30m candles plus the forming candle, and 364 closed days plus the forming day. These are candle-aligned windows, not an exact intrabar trailing duration.
+- Delta Heat's live ladder supports whole-minute charts from 1m through 4h. Other timeframes explicitly show closed bars only.
 - MMT keeps per-price volume snapshots for about the last 1,000 bars. The ladder, the reaction zones and the old wick
   markers only exist for that span.
 - Offside's trap detection looks back 5 days of 5m bars. Its 4h swing levels use about 50 days of 4h bars.
@@ -87,10 +90,9 @@ Everything was checked against exchange data before use (details in [`validation
 - **Offside traps**: identical to a Python replica of the rules on Binance's published 5m data, 9 of 9 on STX and 8 of 8
   on BTC.
 
-The trap backtest covers Binance BTCUSDT perps on 5m bars, January 2025 to October 2026. Only traps at 4h swing points
-leaned positive in both halves of the period, at about +0.15R. That isn't significant, and it is close to round-trip
-taker fees. Weekly to yearly VWAP levels, composite edges and 30m swings showed no consistent edge, and the earlier
-wick-based markers none at all. Treat traps as context, not as signals.
+The recorded historical results used two-sided swing levels and excluded the reclaim bar from flow totals. They do **not** validate the current fixed-side detector. `validation/offside_fixed.py` now supplies the default swing engine to both the event replica and the higher-timeframe backtest, including reclaim-bar flow. The HTF report labels current fixed-side results separately from legacy two-sided comparisons. Historical performance numbers remain for provenance. The corrected run on 187,488 bars produced 266 events; its separate results and limitations are recorded in `validation/README.md`.
+
+Treat traps as price context, not proof of who holds a position or a standalone trading signal.
 
 To rerun the backtests, download the data with `validation/offside_rows.py`, plus Binance's 5m klines and metrics files
 from data.binance.vision into `validation/data/offside/`. The scripts' headers give the details.
@@ -100,7 +102,7 @@ from data.binance.vision into `validation/data/offside/`. The scripts' headers g
 **TradingView watchlist importer**: `tools/tv_watchlist_import.py` replaces the watchlist in the open MMT browser
 session with the markets in a TradingView "Export list" file. It converts `BINANCE:TIAUSDT.P` to Binance perps
 `tia/usd` and `COINBASE:BTCUSD` to Coinbase `btc/usd`. MMT watchlists have no sections, so `###` section headers only
-appear in the importer's report.
+appear in the importer's report. Empty imports are refused. The importer saves a JSON recovery snapshot beside the input file and adds every new market before removing old ones; a failed addition retains all original markets. Successful additions can remain after a failure. Retained markets keep their existing order. Multiple open watchlists require `--widget`.
 
 ```bash
 python3 tools/tv_watchlist_import.py                     # file picker
@@ -121,8 +123,12 @@ osacompile -o ~/Applications/"Import to MMT.app" tools/import-to-mmt.applescript
 
 `indicators/third-party/flimp-btc-aquarium-v5.m5` is FLIMP's script, included for reference. It has these changes:
 - four venues: Binance and Bybit perps, Binance and Coinbase spot;
-- live-only feeds;
+- live-only feeds; only these four venues have controls and appear in the status readout;
 - order books every 30 seconds instead of 5, because MMT keeps every full-depth snapshot and at 5 seconds the tank froze
   within hours.
 
 All credit for the design is FLIMP's.
+
+## Regression checks
+
+Run `uv run --with pytest --with numpy --with polars pytest -q`. Tests exercise watchlist failure recovery and the fixed-side trap engine. MMT `script_check` validates indicator syntax/types; it does not prove live feed synchronization or chart rendering.

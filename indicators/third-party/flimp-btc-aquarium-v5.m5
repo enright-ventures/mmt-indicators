@@ -102,7 +102,7 @@ script "FLIMP BTC Aquarium v5"
 //   full at "Bar full at". 2x or more = OUTSIZED.
 //
 // UNITS: BTC ("Show $ instead of BTC" flips every label).
-// Subscriptions: 18 of 30 - chart, 5m regime feed, 8 trade tapes, 8 books (cap 10).
+// Subscriptions: chart, 5m regime feed, four trade tapes and four books.
 
 input (
   input.section(title: "Size tiers (BTC)")
@@ -164,12 +164,6 @@ input (
   pV2 = input.exchange("bybitf", title: "Perp 2", key: "p_v2")
   pU2 = input.bool(true, title: "Include", key: "p_u2", sameLine: true)
   pC2 = input.color(color.rgb(58, 233, 177), title: "Perp 2 colour", key: "p_c2", sameLine: true)
-  pV3 = input.exchange("okxf", title: "Perp 3", key: "p_v3")
-  pU3 = input.bool(true, title: "Include", key: "p_u3", sameLine: true)
-  pC3 = input.color(color.rgb(58, 233, 177), title: "Perp 3 colour", key: "p_c3", sameLine: true)
-  pV4 = input.exchange("hyperliquid", title: "Perp 4", key: "p_v4")
-  pU4 = input.bool(true, title: "Include", key: "p_u4", sameLine: true)
-  pC4 = input.color(color.rgb(58, 233, 177), title: "Perp 4 colour", key: "p_c4", sameLine: true)
 
   input.section(title: "Spot venues")
   sV1 = input.exchange("binance", title: "Spot 1", key: "s_v1")
@@ -178,18 +172,12 @@ input (
   sV2 = input.exchange("coinbase", title: "Spot 2", key: "s_v2")
   sU2 = input.bool(true, title: "Include", key: "s_u2", sameLine: true)
   sC2 = input.color(color.rgb(0, 219, 255), title: "Spot 2 colour", key: "s_c2", sameLine: true)
-  sV3 = input.exchange("bybit", title: "Spot 3", key: "s_v3")
-  sU3 = input.bool(true, title: "Include", key: "s_u3", sameLine: true)
-  sC3 = input.color(color.rgb(255, 192, 0), title: "Spot 3 colour", key: "s_c3", sameLine: true)
-  sV4 = input.exchange("okx", title: "Spot 4", key: "s_v4")
-  sU4 = input.bool(true, title: "Include", key: "s_u4", sameLine: true)
-  sC4 = input.color(color.rgb(255, 192, 0), title: "Spot 4 colour", key: "s_c4", sameLine: true)
 )
 
 // ----- Subscriptions (10) -----
 // Trimmed 2026-10-14 to perps Binance + Bybit and spot Binance + Coinbase (4 tapes, 4 books, live only):
 // the full eight-venue set (8 tapes + 8 books) left the tank frozen or blank in Dan's workspace. Perp 3/4 and
-// spot 3/4 settings remain but have no feed.
+// spot 3/4 are unavailable; settings and status show only the four connected feeds.
 data (
   chart = subscribe(data.ohlcv)
   m5 = subscribe(data.ohlcv, timeframe: tf("5m"), history: 600)
@@ -399,22 +387,10 @@ fn venueColour(cv: int, cBuy: bool) -> color {
   if cv == 1 {
     return pC2
   }
-  if cv == 2 {
-    return pC3
-  }
-  if cv == 3 {
-    return pC4
-  }
   if cv == 4 {
     return sC1
   }
-  if cv == 5 {
-    return sC2
-  }
-  if cv == 6 {
-    return sC3
-  }
-  return sC4
+  return sC2
 }
 
 // Virtual y (0 = top) -> pane value. The layout spans [-edgePad, 1+edgePad]
@@ -1201,7 +1177,7 @@ fn tankDraw(px: float) {
       uHud.delete("verdict")
       uHud.delete("vstats")
     }
-    let uVen = str.concat(venTxt(0, pV1, now), "   ", venTxt(1, pV2, now), "   ", venTxt(2, pV3, now), "   ", venTxt(3, pV4, now))
+    let uVen = str.concat(venTxt(0, pV1, now), "   ", venTxt(1, pV2, now))
     uHud.get("ven").set(x: uCx - textW(uVen, 9.0) / 2.0, y: yP(perpV - 34.0), text: uVen, color: dim, size: 9.0)
   } else {
     uBox.delete("bg")
@@ -1260,7 +1236,7 @@ fn tankDraw(px: float) {
       sHud.delete("verdict")
       sHud.delete("vstats")
     }
-    let sVen = str.concat(venTxt(4, sV1, now), "   ", venTxt(5, sV2, now), "   ", venTxt(6, sV3, now), "   ", venTxt(7, sV4, now))
+    let sVen = str.concat(venTxt(4, sV1, now), "   ", venTxt(5, sV2, now))
     sHud.get("ven").set(x: sCx - textW(sVen, 9.0) / 2.0, y: yS(spotV - 34.0), text: sVen, color: dim, size: 9.0)
   } else {
     sBox.delete("bg")

@@ -119,8 +119,8 @@ html { scroll-behavior: smooth; }
     <li><a href="#ladder">Delta Heat ladder</a></li>
     <li><a href="#offside">Offside</a></li>
     <li class="sub"><a href="#offside-key">Key</a></li>
-    <li class="sub"><a href="#fuel">Fuel</a></li>
-    <li class="sub"><a href="#entries">Open longs and shorts</a></li>
+    <li class="sub"><a href="#fuel">Counterflow</a></li>
+    <li class="sub"><a href="#entries">Flow-weighted prices</a></li>
     <li class="sub"><a href="#backtest">Backtest</a></li>
     <li><a href="#barstats">Bar Stats</a></li>
     <li><a href="#builtins">Open Interest, Delta Volume</a></li>
@@ -141,19 +141,19 @@ html { scroll-behavior: smooth; }
 <h2 id="layout">The Swordfish chart</h2>
 <p class="tagline">One 30m chart of BTC/USD on Binance perps. A single chart matters: in a two-chart layout, scripts that wait for the live bar stalled.</p>
 <div class="stack">
-  <div><b>Price pane</b><span>Composites (Daily and Weekly), Calendar VWAP (weekly focus with monthly, quarterly and yearly levels), Rolling VWAP (7D, 30D, 365D), the Delta Heat ladder on every candle, and Offside (trap markers, divergences, reaction zones, open longs' and shorts' average entries).</span></div>
+  <div><b>Price pane</b><span>Composites (Daily and Weekly), Calendar VWAP (weekly focus with monthly, quarterly and yearly levels), Rolling VWAP (7D, 30D, 365D), the Delta Heat ladder on every candle, and Offside (trap markers, divergences, reaction zones, flow-weighted price proxies).</span></div>
   <div><b>Open Interest</b><span>MMT built-in, four perps combined, as candles.</span></div>
   <div><b>Delta Volume</b><span>MMT built-in, four perps combined, buy minus sell volume per bar.</span></div>
-  <div><b>Bar Stats</b><span>Swordfish table, one column per bar: Long liqs, Short liqs, Net L, Net S, Volume.</span></div>
+  <div><b>Bar Stats</b><span>Swordfish table, one column per bar: Long liqs, Short liqs, +L proxy, +S proxy, Volume.</span></div>
 </div>
 
 <h2 id="offside-read">Reading for offside traders</h2>
-<p class="tagline">A suggested order for asking who is caught and how much they still have to unwind.</p>
+<p class="tagline">A suggested order for reading failed breaks and the surrounding flow.</p>
 <ul class="tight">
   <li><b>Where is price against the big references?</b> Composite value areas, the calendar VWAPs and their ±1 SD, and the rolling VWAPs show where the market has accepted price. Traders who entered far from these are the ones most likely to be offside.</li>
-  <li><b>Who is underwater?</b> The dotted Open longs and Open shorts lines give the estimated average entry of positions still open. Their right-edge readout shows size and P&amp;L.</li>
-  <li><b>Did a level just trap someone?</b> A blue triangle under a bar marks a failed breakdown that held (shorts trapped); a red one above marks a failed breakout (longs trapped). The corner panel names the level, how many new positions got caught, and their pain point.</li>
-  <li><b>How much is left to unwind?</b> The corner panel shows how much of the newest trap has unwound. A trap that is mostly unwound has little fuel left to push the response further.</li>
+  <li><b>Where was flow concentrated?</b> The dotted +L and +S proxy lines show flow-weighted prices, not participant entries, inventory or P&amp;L.</li>
+  <li><b>Did a level just trap someone?</b> A blue triangle under a bar marks a failed breakdown that held (shorts trapped); a red one above marks a failed breakout (longs trapped). The corner panel names the level, the signed flow proxy during the break, and its VWAP.</li>
+  <li><b>Did flow reverse?</b> Counterflow is an absolute signed-flow proxy after confirmation. It cannot measure remaining trapped positions.</li>
   <li><b>Is it forced?</b> The Long liqs and Short liqs rows in Bar Stats show forced exits, bar by bar.</li>
 </ul>
 
@@ -178,7 +178,8 @@ html { scroll-behavior: smooth; }
 </dl>
 
 <h2 id="rvwap">Swordfish Rolling VWAP</h2>
-<p class="tagline">Trailing 7-day, 30-day and 365-day VWAPs: the average price paid over a fixed lookback, moving every bar.</p>
+<p>The forming candle is included within each window: 335/1,439 closed 30m candles plus the forming candle, or 364 closed daily candles plus the forming day. The windows are candle-aligned.</p>
+<p class="tagline">7-day, 30-day and 365-day candle-aligned VWAPs, including the forming candle within the stated candle count.</p>
 <dl class="rows">
   <dt>Draws</dt><dd>7D and 30D as dashed lines, 365D as a thinner solid white line, each named at the right edge.</dd>
   <dt>Method</dt><dd>HLC3 × volume, Binance and Bybit perps pooled: each exchange keeps its own trailing window and the VWAP is their summed price × volume over summed volume. 7D and 30D roll over 336 and 1,440 bars of 30m candles; 365D rolls over daily candles and steps once a day. The candle still forming is included.</dd>
@@ -187,6 +188,7 @@ html { scroll-behavior: smooth; }
 </dl>
 
 <h2 id="ladder">Swordfish Delta Heat</h2>
+<p>Live reconstruction supports whole-minute chart timeframes from 1m through 4h and can lag by one minute. Other timeframes show closed bars only; the title identifies this limit.</p>
 <p class="tagline">A delta ladder on every candle: who was aggressive at each price inside the bar, in dollars.</p>
 <div class="key">
   <div class="glyph">
@@ -205,7 +207,7 @@ html { scroll-behavior: smooth; }
 </dl>
 
 <h2 id="offside">Swordfish Offside</h2>
-<p class="tagline">Where traders are caught offside, following Stable workshop 11: a level that matters breaks, price reclaims it, and the reclaim holds. Plus how much of each trap has unwound, and where open longs and shorts got in.</p>
+<p class="tagline">Where traders are caught offside, following Stable workshop 11: a level that matters breaks, price reclaims it, and the reclaim holds. Plus signed flow proxies, counterflow and flow-weighted prices.</p>
 
 <h3 id="offside-key">Key</h3>
 <div class="key">
@@ -219,11 +221,11 @@ html { scroll-behavior: smooth; }
   </div>
   <div class="glyph">
     <svg viewBox="0 0 74 50" aria-hidden="true"><polygon points="12,32 24,32 18,24" fill="var(--buy)" opacity=".67"/><polygon points="42,36 60,36 51,23" fill="var(--buy)"/><text x="6" y="46" font-family="IBM Plex Mono, monospace" font-size="8" fill="var(--muted)">usual   many</text></svg>
-    <div><strong>Marker size</strong><span>Bigger and solid when more new positions were trapped than the average of the last 20 traps.</span></div>
+    <div><strong>Marker size</strong><span>Bigger and solid when the valid break-flow proxy exceeds its recent average.</span></div>
   </div>
   <div class="glyph">
     <svg viewBox="0 0 74 50" aria-hidden="true"><line x1="4" y1="18" x2="30" y2="18" stroke="var(--buy)" stroke-width="1"/><line x1="30" y1="30" x2="70" y2="30" stroke="var(--buy)" stroke-width="1.5" stroke-dasharray="2 3"/><line x1="30" y1="42" x2="56" y2="42" stroke="var(--buy)" stroke-width="1.5" stroke-dasharray="2 3" opacity=".4"/></svg>
-    <div><strong>Level and pain point</strong><span>Thin solid line: the level that failed, from the break onward, extending while the trap holds. Dotted line: the pain point, the average price traded during the break, where the trapped side got in. Both are bright while the trap is tracked and stop, faded, where it ends. Each carries a short caption: the solid line names the level, "failed breakdown" or "failed breakout", and holding, unwound, failed or ended; the dotted line reads "trapped shorts' entry" (or longs').</span></div>
+    <div><strong>Level and break VWAP</strong><span>The solid line is the broken level. The dotted line is the break bars' HLC3 weighted by volume, including the reclaim bar. It is not a participant entry price.</span></div>
   </div>
   <div class="glyph">
     <svg viewBox="0 0 74 50" aria-hidden="true"><line x1="8" y1="22" x2="66" y2="10" stroke="var(--sell)" stroke-width="1.5" stroke-dasharray="5 4"/><circle cx="8" cy="22" r="2" fill="var(--sell)"/><circle cx="66" cy="10" r="2" fill="var(--sell)"/><line x1="8" y1="32" x2="66" y2="44" stroke="var(--buy)" stroke-width="1.5" stroke-dasharray="5 4"/></svg>
@@ -235,7 +237,7 @@ html { scroll-behavior: smooth; }
   </div>
   <div class="glyph">
     <svg viewBox="0 0 74 50" aria-hidden="true"><path d="M4 18 L20 16 L36 19 L52 15 L70 16" fill="none" stroke="var(--down)" stroke-width="1.6" stroke-dasharray="1.5 3"/><path d="M4 36 L20 37 L36 33 L52 35 L70 32" fill="none" stroke="var(--up)" stroke-width="1.6" stroke-dasharray="1.5 3"/></svg>
-    <div><strong>Open longs and shorts</strong><span>Dotted green line: estimated average entry of longs still open. Dotted red line: the same for shorts.</span></div>
+    <div><strong>Flow-weighted prices</strong><span>Green: +L proxy; red: +S proxy. These are price/flow summaries, not open positions.</span></div>
   </div>
 </div>
 
@@ -246,8 +248,8 @@ html { scroll-behavior: smooth; }
   <li><b>The break.</b> A 5m bar trades through the level by at least 0.03% of price, coming from the other side.</li>
   <li><b>The reclaim.</b> A 5m close back on the original side within 60 minutes. A break that stays through the level longer than that counts as acceptance, and the level is dropped.</li>
   <li><b>The hold (the trigger).</b> The next three 5m closes (15 minutes) stay on the reclaimed side and the flush extreme is not taken. If a close slips back through within the hour, the break continues; if the flush extreme is taken, there is no trap.</li>
-  <li><b>Who is trapped.</b> New positions opened during the break: shorts for a failed breakdown, sum of max(NS, 0) with <code>NS = (dOI − D) / 2</code>, over the four perp venues. Plus the other side's liquidations during the break (longs stopped out underneath, who must buy back in).</li>
-  <li><b>Pain point.</b> The VWAP of the break bars: where the trapped side traded.</li>
+  <li><b>Flow context.</b> Positive +S or +L proxy during the break, including the reclaim bar. Liquidations are reported separately. Neither identifies a trapped cohort or proves stopped-out traders must re-enter.</li>
+  <li><b>Break VWAP.</b> The HLC3-volume average of break bars, including reclaim; not a participant entry.</li>
   <li><b>Stop and invalidation.</b> The flush extreme. A trap also fails if a 5m close goes back through the level.</li>
   <li>One trap per side per hour, since nearby levels often break together.</li>
 </ul>
@@ -256,42 +258,27 @@ html { scroll-behavior: smooth; }
 
 <h3>Readouts</h3>
 <p><b>Corner panel</b> (bottom right of the price pane): the newest trap on each side. For example:</p>
-<div class="readout"><span class="b">Trapped shorts 10-15 02:40 UTC | 4h swing low 81,240 | 420 BTC new shorts + 35 longs stopped | pain 81,050 | stop 80,900 | 30% unwound | holding</span></div>
+<div class="readout"><span class="b">Trapped shorts 10-15 02:40 UTC | 4h swing low 81,240 | 420 BTC +S flow proxy + 35 longs stopped | break VWAP 81,050 | stop 80,900 | counterflow 126 BTC | holding</span></div>
 <ul class="tight">
   <li>Time is the 5m bar where the hold completed, in UTC (the chart shows local time).</li>
   <li>Status:
     <ul class="tight">
       <li>"holding" while tracked;</li>
       <li>"failed: closed back below (above) the level" or "failed: flush low (high) taken" when the trap fails;</li>
-      <li>"fully unwound" when the covering reaches the trapped size;</li>
+
       <li>"tracked 24h, ended" after the tracking time.</li>
     </ul>
   </li>
 </ul>
-<p><b>Recent traps window</b> (badge beside the script's name): the last 40 traps, with their level, new positions, stopped-out positions, pain point, stop, share unwound and status. Columns sort.</p>
-<p><b>Right edge</b>: the open longs' and shorts' average entries. The figures below are illustrative.</p>
-<div class="readout"><span class="g">Open longs avg entry 81,953 | 3,237 BTC | P&amp;L -0.6%</span>
-<span class="d">Open shorts avg entry 82,233 | 9,956 BTC | P&amp;L +0.9%</span></div>
-<p class="meta">MMT scripts cannot show tooltips, so the corner panel and the Recent traps window replace hover.</p>
-
-<h3 id="fuel">Fuel: how much of a trap has unwound</h3>
-<ul class="tight">
-  <li>Each 5m bar after the trap adds its closing shorts (for trapped shorts) or closing longs, max(−NS, 0) or max(−NL, 0), over the four venues, against the trapped size.</li>
-  <li>Tracking stops when the trap fails, when 100% has unwound, or after 24 hours ("Stop tracking after hours").</li>
-  <li>Every closing trader counts, not only the trapped ones, so read the share as an upper bound.</li>
-</ul>
-
-<h3 id="entries">Open longs and shorts (the dotted entry lines)</h3>
-<p>The "Open longs avg entry" and "Open shorts avg entry" readouts used to say "Longs in" and "Shorts in". They estimate where the longs and shorts still holding positions got in on average.</p>
-<ul class="tight">
-  <li>Each bar's new longs and new shorts come from the same split as Bar Stats: <code>NL = (dOI + D) / 2</code>, <code>NS = (dOI − D) / 2</code>. Here they are aggregated across Binance, Bybit, OKX and Hyperliquid perps: D is the four venues' summed buy minus sell volume and dOI the change in their summed open interest. The four-venue sum matched MMT's aggregate delta on all 200 bars checked.</li>
-  <li>New positions are added at the bar's HLC3. Closing bars take positions off at the current average.</li>
-  <li>There is no fixed lookback window. Every bar since the chart's history starts counts, but older positions fade with a half-life of 96 bars (2 days on 30m): a position opened 2 days ago counts half, 4 days ago a quarter. The setting is "Half-life in bars".</li>
-  <li>Size is in BTC. P&amp;L is price against the average entry, from that side's view.</li>
-</ul>
-<p>It is an estimate from aggregate flows, not exchange-reported positions.</p>
-
-<h3 id="backtest">Backtest</h3>
+<p><b>Recent traps window</b> (badge beside the script's name): the last 40 traps, with their level, break-flow proxy, liquidations, break VWAP, stop, absolute counterflow and status. Columns sort.</p>
+<p><b>Right edge:</b> +L and +S flow-weighted prices, proxy weights and price distance. These are not position sizes, entries or P&amp;L.</p>
+<h3 id="fuel">Counterflow proxy</h3>
+<p>After confirmation, opposite-signed NL/NS proxy values accumulate as an absolute amount. There is no percentage unwound, depletion threshold or inferred remaining inventory. Price invalidation or the time limit ends tracking.</p>
+<h3 id="entries">Flow-weighted price proxies</h3>
+<p>The signed formulas are NL = (dOI + D) / 2 and NS = (dOI - D) / 2. Positive values add weight at HLC3, negative values reduce weight, and weights fade using the half-life in hours. These assumptions do not reconstruct participant holdings.</p>
+<p>All selected venues need aligned candles and OI. Missing break data withholds the break-flow total; missing subsequent data withholds counterflow. Flow-weighted price state resets after a gap. Price traps still run.</p>
+<h3 id="backtest">Historical backtest (superseded rules)</h3>
+<p><b>Review correction:</b> these numbers used two-sided swings and excluded reclaim-bar flow. They do not validate the current fixed-side indicator. The Python replica and current HTF swing report now share the fixed-side engine; the current rerun is recorded in validation/README.md.</p>
 <p>Workshop-11 traps on Binance BTCUSDT perps, 5m, January 2025 to 13 October 2026 (187,488 bars), with Binance 5m open interest. Each row shows the two halves of the period (split 1 December 2025), so you can see whether a result holds in both.</p>
 <ul class="tight">
   <li><b>Entry:</b> the close where the hold completes.</li>
@@ -313,11 +300,11 @@ html { scroll-behavior: smooth; }
   </tbody>
 </table></div>
 <div class="verdict">
-  <p><b>Verdict:</b> only traps at 4h swing points leaned positive in both halves, about +0.15R. That is modest, no t-statistic reached 2, and it is close to taker fees for a round trip. Use traps as context for who is caught and where their pain sits, not as a mechanical entry.</p>
+  <p><b>Historical verdict:</b> only traps at 4h swing points leaned positive in both halves, about +0.15R. That is modest, no t-statistic reached 2, and it is close to taker fees for a round trip. These historical results do not establish which participants are caught or their entry prices.</p>
   <p>The earlier wick method showed no edge at all over a year: 796 markers, no better than any bar with a 35% wick.</p>
 </div>
 <p><b>Cross-check:</b> the script run inside MMT (Binance only) and a Python replica of its rules (on Binance's published 5m data) found the same traps at the same 5m bar and side: 9 of 9 on STX and 8 of 8 on BTC from 20 September to 13 October.</p>
-<p><b>Fuel test</b> (on the wick-method traps): after 4 bars, traps with the least unwound went on +7.7 bp over the next 12 bars, and mostly unwound ones gave back 5 bp. That's suggestive, not significant.</p>
+<p><b>Historical counterflow test</b> (on wick-method traps): after 4 bars, the lowest proxy-ratio group went on +7.7 bp over the next 12 bars; the highest gave back 5 bp. This ratio did not measure position unwinding; the result was not significant.</p>
 
 <h2 id="barstats">Swordfish Bar Stats</h2>
 <p class="tagline">A table under the chart, one column per bar, shaded by sign and by size against that row's last 48 bars.</p>
@@ -332,13 +319,13 @@ html { scroll-behavior: smooth; }
   <tbody>
     <tr><td>Long liqs</td><td>Longs forcibly closed on the bar (forced selling, red)</td><td>Binance, Bybit, OKX, Hyperliquid perps</td></tr>
     <tr><td>Short liqs</td><td>Shorts forcibly closed (forced buying, green)</td><td>Same four venues</td></tr>
-    <tr><td>Net L</td><td>New longs minus closed longs: (dOI + D) / 2</td><td>Same four venues</td></tr>
-    <tr><td>Net S</td><td>New shorts minus closed shorts: (dOI − D) / 2</td><td>Same four venues</td></tr>
+    <tr><td>+L proxy</td><td>Signed +L flow proxy: (dOI + D) / 2</td><td>Same four venues</td></tr>
+    <tr><td>+S proxy</td><td>Signed +S flow proxy: (dOI − D) / 2</td><td>Same four venues</td></tr>
     <tr><td>Volume</td><td>Buy and sell split, net delta as the number</td><td>Same four venues</td></tr>
   </tbody>
 </table></div>
 <p>Open interest and liquidations come from MMT's combined streams. MMT gives scripts no combined candles, so buy and sell volume is the four venues' candles summed. That sum matches MMT's combined volume delta to within 0.03 BTC per bar. The "Data from" setting switches to Binance + Bybit or the chart's venue.</p>
-<p>Values are in BTC. Net L + Net S equals the change in open interest, and Net L − Net S equals the delta. MMT names long liquidations <code>buyLiq</code>. That was checked on 3,000 one-minute bars: minutes with buyLiq averaged −15 bp and minutes with sellLiq +15 bp.</p>
+<p>Values are in BTC. The sum of the two proxies equals the change in open interest, and their difference equals the delta. MMT names long liquidations <code>buyLiq</code>. That was checked on 3,000 one-minute bars: minutes with buyLiq averaged −15 bp and minutes with sellLiq +15 bp.</p>
 
 <h2 id="builtins">Open Interest and Delta Volume</h2>
 <p>MMT's built-in panes, added as chart layers.</p>

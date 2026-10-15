@@ -6,7 +6,7 @@ script "Positioning: NL / NS"
 //   Net Longs  change  NL = (dOI + D) / 2
 //   Net Shorts change  NS = (dOI - D) / 2
 // (NL + NS = dOI, NL - NS = D.) These are derived, not exchange-reported
-// position counts, so treat them as an estimate. OI and volume must be in
+// position counts; they do not identify openings or closings. OI and volume must be in
 // the same unit; use the multiply toggles if one is in coins and the other
 // in quote currency.
 
@@ -20,14 +20,14 @@ input (
   oiTimesPrice    = input.bool(true, title: "Multiply OI change by price")
   showLabels      = input.bool(true, title: "Show bar values")
   labelSize       = input.float(9.0, title: "Label size", min: 4.0, max: 24.0)
-  nlColor         = input.color(color.rgb(38, 166, 91), title: "NL increase")
-  nsColor         = input.color(color.rgb(214, 72, 72), title: "NS increase")
-  offColor        = input.color(color.rgb(112, 118, 126), title: "Decrease / closing")
+  nlColor         = input.color(color.rgb(38, 166, 91), title: "+L proxy increase")
+  nsColor         = input.color(color.rgb(214, 72, 72), title: "+S proxy increase")
+  offColor        = input.color(color.rgb(112, 118, 126), title: "Negative proxy")
 )
 
 pane (
-  nlPane = pane(title: "NL - Net Longs Δ", height: 0.16)
-  nsPane = pane(title: "NS - Net Shorts Δ", height: 0.16)
+  nlPane = pane(title: "NL - +L flow proxy", height: 0.16)
+  nsPane = pane(title: "NS - +S flow proxy", height: 0.16)
 )
 
 plot (

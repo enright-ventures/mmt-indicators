@@ -1,7 +1,7 @@
 """Pooled (Binance + Bybit BTCUSDT perps) rolling VWAPs from the exchanges' REST candles, to check Swordfish Rolling VWAP.
 
-Value at 30m bar T, as the script plots it on the chart: 7D = the 336 closed 30m candles before T plus candle T,
-30D = 1,440 before T plus T; 365D = the 365 closed daily candles before T's day plus T's day so far (built from that
+Value at 30m bar T, as the script plots it on the chart: 7D = the 335 closed 30m candles before T plus candle T,
+30D = 1,439 before T plus T; 365D = the 364 closed daily candles before T's day plus T's day so far (built from that
 day's 30m candles up to T). HLC3 x volume, both venues summed. Usage: python3 rvwap_pooled_ref.py <T unix seconds>...
 """
 import json, sys, urllib.request
@@ -40,17 +40,17 @@ for T in map(int, sys.argv[1:]):
     d = [binance("1d", day0 * 1000 - 1, 370), bybit("D", day0 * 1000 - 1, 370)]
     res = {}
     for name, n in (("7D", 336), ("30D", 1440)):
-        P = V = 0.0
+        weighted_price = volume = 0.0
         for src in m:
-            for t in [T - 1800 * i for i in range(n, -1, -1)]:
-                a, b = pv(src[t]); P += a; V += b
-        res[name] = P / V
-    P = V = 0.0
+            for t in [T - 1800 * i for i in range(n - 1, -1, -1)]:
+                a, b = pv(src[t]); weighted_price += a; volume += b
+        res[name] = weighted_price / volume
+    weighted_price = volume = 0.0
     for src_d, src_m in zip(d, m):
-        for t in [day0 - 86400 * i for i in range(365, 0, -1)]:
-            a, b = pv(src_d[t]); P += a; V += b
+        for t in [day0 - 86400 * i for i in range(364, 0, -1)]:
+            a, b = pv(src_d[t]); weighted_price += a; volume += b
         bars = [src_m[t] for t in range(day0, T + 1, 1800)]
         h = max(x[0] for x in bars); l = min(x[1] for x in bars); c = bars[-1][2]; v = sum(x[3] for x in bars)
-        a, b = pv((h, l, c, v)); P += a; V += b
-    res["365D"] = P / V
+        a, b = pv((h, l, c, v)); weighted_price += a; volume += b
+    res["365D"] = weighted_price / volume
     print(T, {k: round(v, 2) for k, v in res.items()})

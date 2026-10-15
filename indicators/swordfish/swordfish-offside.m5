@@ -1,37 +1,14 @@
 script "Swordfish Offside"
 
-// Where traders are caught offside and have to unwind.
-// - Traps (Stable workshop 11, "Trading Failed Breakdowns and Traps"), judged on 5m bars whatever the chart timeframe:
-//   a level that matters is broken (a 5m bar trades through it by at least the break size), price closes back on the
-//   original side within the reclaim window, and the reclaim holds (the next 5m closes stay on that side and the flush
-//   extreme is not taken). The marker appears when the hold completes, beyond the flush extreme, which is the stop.
-//   A failed breakdown traps shorts (blue triangle below); a failed breakout traps longs (red triangle above). A thin
-//   line marks the level from the break, extending while the trap holds and fading where it ends.
-//   Who is trapped: the new positions opened during the break, sum of max(NS, 0) for shorts (max(NL, 0) for longs)
-//   with NS = (dOI - D) / 2, NL = (dOI + D) / 2 over the chosen venues, plus the opposite side's liquidations during
-//   the break (stopped-out longs who must buy back in). Pain point: the break bars' VWAP, where the trapped side
-//   traded (dotted line). What forces them: their covering after the hold, counted as fuel.
-//   Levels: 4h swing highs and lows (3 bars each side; used for 14 days) by default. Optional: prior, older-quarter
-//   and developing week / month / quarter / year VWAP and +/-1 SD (HLC3 x volume) from the chart market's 4h candles;
-//   they can sit slightly off the Calendar VWAP's lines, which pool Binance and Bybit and use 30m candles for week
-//   and month (pooling here made the script too slow to load). Developing levels are taken at each UTC day start. Swing levels fix their side; VWAP levels can trap either way, set by the side price breaks from.
-//   Backtest (validation/README.md): 4h swing traps leaned positive in both halves of Jan 2025 - Oct 2026; the VWAP
-//   levels showed no consistent edge and the monthly and higher ones are too rare to test. Context, not a signal.
-// - Fuel: each 5m bar after a trap adds its closing shorts (for trapped shorts) or closing longs, max(-NS, 0) or
-//   max(-NL, 0), against the trapped size. Every closing trader counts, so the share is an upper bound. Tracking stops
-//   when a 5m close goes back through the level, the flush extreme is taken, 100% has unwound, or after the tracking
-//   time. The newest trap on each side is described at the price pane's bottom right; every trap is in the "Recent
-//   traps" window (badge beside the script's name).
-// - Old wick markers (off by default): heavy net delta inside a rejected wick, from the ladder's volume snapshots.
-// - Delta divergence: the bar makes a new high (low) of the lookback while cumulative delta stays below (above) its
-//   level at the earlier high (low); a dashed line joins the two.
-// - Reaction zones: rows whose delta is several times a typical bar's largest row (runs of such rows merge),
-//   extended right until a bar closes through them: buying in blue (support), selling in red (resistance).
-// - Average entries: an estimate of where the longs and shorts still open got in. New longs and new shorts per bar are
-//   split as in Bar Stats (NL = (dOI + D) / 2, NS = (dOI - D) / 2) over the chosen venues: D sums each venue's candle
-//   buy - sell volume and dOI is their summed open interest. New positions add at the bar's HLC3, closes take
-//   positions off at the average price, and older positions fade with the half-life (in hours, so any timeframe).
-
+// Failed breaks of confirmed 4h swing levels: break, reclaim, then hold on 5m closes.
+// Optional calendar levels use the chart venue's 4h candles, with UTC Monday weeks.
+// +L = (dOI + delta) / 2 and +S = (dOI - delta) / 2 are signed flow proxies.
+// They cannot identify position openings, closings, entries, P&L or a trapped cohort.
+// Break VWAP is HLC3 x chart volume, not a participant's entry. Counterflow is the
+// opposite-signed proxy accumulated after confirmation; it never proves a trap unwound.
+// Missing selected-venue candles/OI withhold flow totals; price structure still runs.
+// Historical two-sided backtests do not validate this fixed-side swing detector.
+// Wick markers, delta divergence and reaction zones are separate contextual overlays.
 input (
   input.section(title: "Traps")
   showTraps = input.bool(true, title: "Trap markers (failed breakdowns and breakouts)")
@@ -43,7 +20,7 @@ input (
   useVwapM = input.bool(false, title: "monthly", sameLine: true)
   useVwapQ = input.bool(false, title: "quarterly (and older quarters)", sameLine: true)
   useVwapY = input.bool(false, title: "yearly", sameLine: true)
-  showFuel = input.bool(true, title: "Track how much of each trap has unwound (fuel)")
+  showFuel = input.bool(true, title: "Show counterflow proxy and break VWAP")
   trackHours = input.int(24, title: "Stop tracking after hours", min: 1, max: 168, sameLine: true)
   input.section(title: "Old wick markers")
   showWick = input.bool(false, title: "Trapped-wick markers (the earlier method)")
@@ -56,9 +33,9 @@ input (
   showZones = input.bool(true, title: "Reaction zones")
   zoneMult = input.float(2.5, title: "Row delta at least x the typical largest row", min: 0.5)
   maxZones = input.int(30, title: "Zones kept", min: 1, max: 100)
-  input.section(title: "Average entries")
-  showEntries = input.bool(true, title: "Longs' and shorts' average entries")
-  halfLifeHours = input.float(48.0, title: "Half-life in hours", min: 1.0, max: 2000.0, description: "Positions opened this many hours ago count half.")
+  input.section(title: "Flow-weighted price proxies")
+  showEntries = input.bool(true, title: "+L / +S flow-weighted prices (not entries)")
+  halfLifeHours = input.float(48.0, title: "Half-life in hours", min: 1.0, max: 2000.0, description: "Proxy weights from this many hours ago count half; these are not position inventories.")
   input.section(title: "Data")
   rowSize = input.float(0.0, title: "Row size in price (0 = auto, as the delta ladder)", min: 0.0, description: "Auto: the average range of the last 100 bars divided by 10 (the delta ladder's default rows per bar), on a 1/2/2.5/5 grid, never below the tick size; changes only when that range doubles or halves.")
   venue = input.select("Perps: Binance, Bybit, OKX, Hyperliquid", title: "Volume, OI and liquidations from", options: ["Chart venue", "Binance + Bybit perps", "Perps: Binance, Bybit, OKX, Hyperliquid"])
@@ -66,8 +43,8 @@ input (
   input.section(title: "Look")
   buyColor = input.color(color.rgb(92, 156, 255), title: "Buying / trapped shorts")
   sellColor = input.color(color.rgb(255, 92, 102), title: "Selling / trapped longs", sameLine: true)
-  longColor = input.color(color.rgb(34, 171, 126), title: "Longs' average entry")
-  shortColor = input.color(color.rgb(214, 72, 92), title: "Shorts' average entry", sameLine: true)
+  longColor = input.color(color.rgb(34, 171, 126), title: "+L flow-weighted price")
+  shortColor = input.color(color.rgb(214, 72, 92), title: "+S flow-weighted price", sameLine: true)
   textSize = input.float(16.0, title: "Label size", min: 8.0, max: 28.0)
 )
 
@@ -94,6 +71,14 @@ data (
   okC = subscribe(data.ohlcv, exchange: "okxf")
   hlC = subscribe(data.ohlcv, exchange: "hyperliquid")
   oiAgg = subscribe(data.oi, exchange: source)
+  bnOi = subscribe(data.oi, exchange: "binancef")
+  bnOi5 = subscribe(data.oi, exchange: "binancef", timeframe: 5m, history: 1500)
+  bbOi = subscribe(data.oi, exchange: "bybitf")
+  bbOi5 = subscribe(data.oi, exchange: "bybitf", timeframe: 5m, history: 1500)
+  okOi = subscribe(data.oi, exchange: "okxf")
+  okOi5 = subscribe(data.oi, exchange: "okxf", timeframe: 5m, history: 1500)
+  hlOi = subscribe(data.oi, exchange: "hyperliquid")
+  hlOi5 = subscribe(data.oi, exchange: "hyperliquid", timeframe: 5m, history: 1500)
   // traps run on 5m bars: price from the chart's market, flow from the chosen venues
   p5 = subscribe(data.ohlcv, timeframe: 5m, history: 1500)
   bn5 = subscribe(data.ohlcv, exchange: "binancef", timeframe: 5m, history: 1500)
@@ -111,18 +96,18 @@ window traps = window(title: "Recent traps") {
     table.col(title: "Confirmed (UTC)", width: 1.1),
     table.col(title: "Trapped", width: 0.7),
     table.col(title: "Level", width: 1.6),
-    table.col(title: "New positions", align: align.right),
+    table.col(title: "Break flow proxy", align: align.right),
     table.col(title: "Stopped out", align: align.right),
-    table.col(title: "Pain point", align: align.right),
+    table.col(title: "Break VWAP", align: align.right),
     table.col(title: "Stop", align: align.right),
-    table.col(title: "Unwound", align: align.right),
+    table.col(title: "Counterflow proxy", align: align.right),
     table.col(title: "Status", width: 1.3),
   ], title: "Traps", capacity: 60),
 }
 
 plot (
-  longLine = plot.line(title: "Longs' average entry", color: longColor, width: 1.5, style: linestyle.dotted, showLabel: false)
-  shortLine = plot.line(title: "Shorts' average entry", color: shortColor, width: 1.5, style: linestyle.dotted, showLabel: false)
+  longLine = plot.line(title: "+L flow-weighted price", color: longColor, width: 1.5, style: linestyle.dotted, showLabel: false)
+  shortLine = plot.line(title: "+S flow-weighted price", color: shortColor, width: 1.5, style: linestyle.dotted, showLabel: false)
 )
 
 state (
@@ -142,7 +127,7 @@ state (
   zFrom = time[](100)
   zLive = bool[](100)
   zNext: int = 0
-  // estimated open longs and shorts: size and size x entry price
+  // Signed flow weights and their HLC3-weighted prices; not open positions.
   lQty: float = 0.0
   lCost: float = 0.0
   sQty: float = 0.0
@@ -175,6 +160,7 @@ state (
   lvPv = float[](120)
   lvV = float[](120)
   lvFrom = time[](120)
+  lvFlowOk = bool[](120)
   prevC5: float = 0.0
   lastTrap = map<int, float>(2)
   recentNew = rolling<float>(20)
@@ -205,6 +191,8 @@ state (
   fLive = bool[](40)
   fWick = bool[](40)
   fFrom = time[](40)
+  fFlowOk = bool[](40)
+  fCounterOk = bool[](40)
   fNext: int = 0
   painLines = entities.linePool(max: 40)
   levelLines = entities.linePool(max: 40)
@@ -215,6 +203,34 @@ fn niceStep(target: float) -> float {
   let magnitude = math.pow(10.0, math.floor(math.log10(target) ?? 0.0)) ?? 1.0
   let n = target / magnitude
   return magnitude * (n <= 1.0 ? 1.0 : n <= 2.0 ? 2.0 : n <= 2.5 ? 2.5 : n <= 5.0 ? 5.0 : 10.0)
+}
+
+fn validFlow(t: time, ct: time?, bv: float?, sv: float?, ot: time?, oo: float?, oc: float?) -> bool {
+  return ct == t && ot == t && math.isFinite(bv) && math.isFinite(sv) && math.isFinite(oo) && math.isFinite(oc)
+}
+
+fn flowReady5(t: time) -> bool {
+  if useChart { return validFlow(t, p5.time, p5.buyVolume, p5.sellVolume, oi5.time, oi5.open, oi5.close) }
+  let primary = validFlow(t, bn5.time, bn5.buyVolume, bn5.sellVolume, bnOi5.time, bnOi5.open, bnOi5.close) &&
+    validFlow(t, bb5.time, bb5.buyVolume, bb5.sellVolume, bbOi5.time, bbOi5.open, bbOi5.close)
+  return primary && (!useAll || (validFlow(t, ok5.time, ok5.buyVolume, ok5.sellVolume, okOi5.time, okOi5.open, okOi5.close) &&
+    validFlow(t, hl5.time, hl5.buyVolume, hl5.sellVolume, hlOi5.time, hlOi5.open, hlOi5.close)))
+}
+
+fn flowReadyClosed(t: time) -> bool {
+  if useChart { return validFlow(t, chart.time, chart.buyVolume, chart.sellVolume, oiAgg.time, oiAgg.open, oiAgg.close) }
+  let primary = validFlow(t, bnC.time, bnC.buyVolume, bnC.sellVolume, bnOi.time, bnOi.open, bnOi.close) &&
+    validFlow(t, bbC.time, bbC.buyVolume, bbC.sellVolume, bbOi.time, bbOi.open, bbOi.close)
+  return primary && (!useAll || (validFlow(t, okC.time, okC.buyVolume, okC.sellVolume, okOi.time, okOi.open, okOi.close) &&
+    validFlow(t, hlC.time, hlC.buyVolume, hlC.sellVolume, hlOi.time, hlOi.open, hlOi.close)))
+}
+
+fn flowReadyLive(t: time) -> bool {
+  if useChart { return validFlow(t, chart.forming.time, chart.forming.buyVolume, chart.forming.sellVolume, oiAgg.forming.time, oiAgg.forming.open, oiAgg.forming.close) }
+  let primary = validFlow(t, bnC.forming.time, bnC.forming.buyVolume, bnC.forming.sellVolume, bnOi.forming.time, bnOi.forming.open, bnOi.forming.close) &&
+    validFlow(t, bbC.forming.time, bbC.forming.buyVolume, bbC.forming.sellVolume, bbOi.forming.time, bbOi.forming.open, bbOi.forming.close)
+  return primary && (!useAll || (validFlow(t, okC.forming.time, okC.forming.buyVolume, okC.forming.sellVolume, okOi.forming.time, okOi.forming.open, okOi.forming.close) &&
+    validFlow(t, hlC.forming.time, hlC.forming.buyVolume, hlC.forming.sellVolume, hlOi.forming.time, hlOi.forming.open, hlOi.forming.close)))
 }
 
 // Dollars as $850K or $2.1M.
@@ -276,6 +292,7 @@ fn addLevel(price: float, side: float, name: string, expires: float) {
     lvPv.push(0.0)
     lvV.push(0.0)
     lvFrom.push(time.fromUnixSeconds(0))
+    lvFlowOk.push(false)
     return
   }
   if free < 0 { return }
@@ -290,16 +307,14 @@ fn addLevel(price: float, side: float, name: string, expires: float) {
 fn drawTrap(k: int, now: time) {
   let side = fSide[k] ?? 0.0
   let at = fTime[k] ?? now
-  let qty = math.max(fQty[k] ?? 0.0, 0.000000001)
-  let share = (fDone[k] ?? 0.0) / qty
   let live = fLive[k] ?? false
   let tint = side < 0.0 ? sellColor : buyColor
   let pain = fPain[k] ?? 0.0
   // short captions on the lines: what the line is, and how the trap stands
   let st = fStatus[k] ?? ""
-  let brief = live ? "holding" : st == "fully unwound" ? "unwound" : str.startsWith(st, "failed") ? "failed" : "ended"
+  let brief = live ? "holding" : str.startsWith(st, "failed") ? "failed" : "ended"
   if showFuel {
-    painLines.get(k).set(at, pain, now, pain, width: 1.5, color: color.withAlpha(tint, live ? 220 : 90), style: linestyle.dotted, text: side > 0.0 ? "trapped shorts' entry" : "trapped longs' entry")
+    painLines.get(k).set(at, pain, now, pain, width: 1.5, color: color.withAlpha(tint, live ? 220 : 90), style: linestyle.dotted, text: "break VWAP (not entry)")
   }
   // the level that failed, from the break to now while the trap holds, then fixed where it ended
   if !(fWick[k] ?? false) {
@@ -310,11 +325,11 @@ fn drawTrap(k: int, now: time) {
     time.format(at, "{MM}-{DD} {HH}:{mm}"),
     table.cell(side < 0.0 ? "Longs" : "Shorts", fg: tint),
     fName[k] ?? "",
-    str.format("{0:,.0} {1}", qty, coin),
+    (fFlowOk[k] ?? false) ? str.format("{0:,.0} {1}", fQty[k] ?? 0.0, coin) : "unavailable",
     (fWick[k] ?? false) ? "-" : str.format("{0:,.0} {1}", fStopped[k] ?? 0.0, coin),
     str.format("{0:,.0}", pain),
     str.format("{0:,.0}", fExt[k] ?? 0.0),
-    str.format("{0:.0%}", share),
+    (fCounterOk[k] ?? false) ? str.format("{0:,.0} {1}", fDone[k] ?? 0.0, coin) : "unavailable",
     fStatus[k] ?? "")
 }
 
@@ -322,18 +337,17 @@ fn drawTrap(k: int, now: time) {
 fn trapLine(k: int, name: string) -> string {
   let at = fTime[k]
   let side = fSide[k] ?? 0.0
-  let qty = math.max(fQty[k] ?? 0.0, 0.000000001)
   let done = fDone[k] ?? 0.0
-  let who = side > 0.0 ? "new shorts" : "new longs"
+  let who = side > 0.0 ? "+S flow proxy" : "+L flow proxy"
   let stopped = fWick[k] ?? false ? "" : str.format(" + {0:,.0} {1} stopped", fStopped[k] ?? 0.0, side > 0.0 ? "longs" : "shorts")
   return str.concat(name, " ", at != null ? time.format(at, "{MM}-{DD} {HH}:{mm} UTC") : "", " | ", fName[k] ?? "", " | ",
-    str.format("{0:,.0} {1} {2}", qty, coin, (fWick[k] ?? false) ? "in the wick" : who), stopped,
-    " | pain ", str.format("{0:,.0}", fPain[k] ?? 0.0), " | stop ", str.format("{0:,.0}", fExt[k] ?? 0.0),
-    showFuel ? str.format(" | {0:.0%} unwound", math.min(done / qty, 9.99)) : "", " | ", fStatus[k] ?? "")
+    (fFlowOk[k] ?? false) ? str.format("{0:,.0} {1} {2}", fQty[k] ?? 0.0, coin, who) : "flow unavailable", stopped,
+    " | break VWAP ", str.format("{0:,.0}", fPain[k] ?? 0.0), " | stop ", str.format("{0:,.0}", fExt[k] ?? 0.0),
+    showFuel ? ((fCounterOk[k] ?? false) ? str.format(" | counterflow {0:,.0} {1}", done, coin) : " | counterflow unavailable") : "", " | ", fStatus[k] ?? "")
 }
 
 // A new trap into the next ring slot, with its marker.
-fn addTrap(side: float, at: time, from: time, qty: float, ext: float, pain: float, lvl: float, name: string, stopped: float, wick: bool) {
+fn addTrap(side: float, at: time, from: time, qty: float, ext: float, pain: float, lvl: float, name: string, stopped: float, wick: bool, flowOk: bool) {
   let k = fNext
   if fSide.len < 40 {
     fSide.push(side)
@@ -350,6 +364,8 @@ fn addTrap(side: float, at: time, from: time, qty: float, ext: float, pain: floa
     fLive.push(true)
     fWick.push(wick)
     fFrom.push(from)
+    fFlowOk.push(flowOk)
+    fCounterOk.push(flowOk)
   } else {
     fSide[k] = side
     fTime[k] = at
@@ -365,13 +381,14 @@ fn addTrap(side: float, at: time, from: time, qty: float, ext: float, pain: floa
     fLive[k] = true
     fWick[k] = wick
     fFrom[k] = from
+    fFlowOk[k] = flowOk
+    fCounterOk[k] = flowOk
   }
   fNext = k + 1 >= 40 ? 0 : k + 1
   if side < 0.0 { nTL += 1 } else { nTS += 1 }
-  // the marker sits beyond the flush extreme on the chart bar that holds the confirmation; bigger when more new
-  // positions were trapped than the recent traps' average
-  let many = qty > (recentNew.avg() ?? qty)
-  recentNew.push(qty)
+  // The marker sits beyond the flush extreme; size compares valid break-flow proxies with recent traps.
+  let many = flowOk && qty > (recentNew.avg() ?? qty)
+  if flowOk { recentNew.push(qty) }
   let bar = time.floor(at, context.timeframe)
   let gap = (step > 0.0 ? step : ext * 0.0006) * 3.0
   marks.get(side < 0.0 ? "L" : "S", at).set(bar, side < 0.0 ? ext + gap : ext - gap, shape: side < 0.0 ? shape.down : shape.up, color: color.withAlpha(side < 0.0 ? sellColor : buyColor, many ? 255 : 170), size: many ? 11.0 : 7.0)
@@ -390,7 +407,7 @@ fn unitOn(u: int) -> bool {
 fn periodKey(u: int, t: time) -> float {
   let y = time.year(t)
   let m = time.month(t)
-  if u == 0 { return math.floor((unix(t) + 345600.0) / 604800.0) }
+  if u == 0 { return unix(time.floor(t, 1W)) }
   if u == 1 { return float(y * 12 + m - 1) }
   if u == 2 { return float(y * 4) + math.floor(float(m - 1) / 3.0) }
   return float(y)
@@ -476,7 +493,7 @@ on h4.close {
   }
 }
 
-// Traps and fuel, every 5m bar.
+// Traps and counterflow, every 5m bar.
 on p5.close {
   let t = p5.time
   let h = p5.high
@@ -485,13 +502,14 @@ on p5.close {
   if t != null && h != null && l != null && c != null {
     if step <= 0.0 { step = rowSize > 0.0 ? rowSize : niceStep(c * 0.0006 * tfScale) }
     let now = unix(t)
-    // the bar's new and closing positions over the chosen venues
+    // Signed flow proxies over the chosen venues.
     let bv = useChart ? (p5.buyVolume ?? 0.0) : (bn5.buyVolume ?? 0.0) + (bb5.buyVolume ?? 0.0) + (useAll ? (ok5.buyVolume ?? 0.0) + (hl5.buyVolume ?? 0.0) : 0.0)
     let sv = useChart ? (p5.sellVolume ?? 0.0) : (bn5.sellVolume ?? 0.0) + (bb5.sellVolume ?? 0.0) + (useAll ? (ok5.sellVolume ?? 0.0) + (hl5.sellVolume ?? 0.0) : 0.0)
     let d = bv - sv
     let oo = oi5.open
     let oc = oi5.close
-    let dOi = oo != null && oc != null ? oc - oo : 0.0
+    let flowOk = flowReady5(t) && oi5.time == t && oo != null && oc != null
+    let dOi = flowOk && oo != null && oc != null ? oc - oo : 0.0
     let nl = (dOi + d) / 2.0
     let ns = (dOi - d) / 2.0
     let longLiq = liq5.buyLiq ?? 0.0
@@ -499,22 +517,22 @@ on p5.close {
     let vv = p5.volume ?? 0.0
     let pp = (h + l + c) / 3.0
 
-    // fuel and status of the traps being tracked
+    // Counterflow and price status of the traps being tracked.
     for k in 0..fSide.len {
       if fLive[k] ?? false {
         let side = fSide[k] ?? 0.0
         let done = (fDone[k] ?? 0.0) + (side > 0.0 ? math.max(-ns, 0.0) : math.max(-nl, 0.0))
-        fDone[k] = done
+        fCounterOk[k] = (fCounterOk[k] ?? false) && flowOk
+        if fCounterOk[k] ?? false { fDone[k] = done }
         let lvl = fLvl[k] ?? 0.0
         let ext = fExt[k] ?? 0.0
         let wick = fWick[k] ?? false
         let back = !wick && (side > 0.0 ? c < lvl : c > lvl)
         let flushed = side > 0.0 ? l < ext : h > ext
-        let spent = done >= (fQty[k] ?? 0.0)
         let expired = now - unix(fTime[k] ?? t) >= float(trackHours) * 3600.0
-        if back || flushed || spent || expired {
+        if back || flushed || expired {
           fLive[k] = false
-          fStatus[k] = back ? (side > 0.0 ? "failed: closed back below the level" : "failed: closed back above the level") : flushed ? (wick ? (side > 0.0 ? "closed below wick" : "closed above wick") : (side > 0.0 ? "failed: flush low taken" : "failed: flush high taken")) : spent ? "fully unwound" : str.format("tracked {0}h, ended", trackHours)
+          fStatus[k] = back ? (side > 0.0 ? "failed: closed back below the level" : "failed: closed back above the level") : flushed ? (wick ? (side > 0.0 ? "closed below wick" : "closed above wick") : (side > 0.0 ? "failed: flush low taken" : "failed: flush high taken")) : str.format("tracked {0}h, ended", trackHours)
         }
         drawTrap(k, t)
       }
@@ -538,6 +556,7 @@ on p5.close {
               if downOk { dir = 1.0 } else if upOk { dir = -1.0 }
               if dir != 0.0 {
                 lvState[k] = 1
+                lvFlowOk[k] = flowOk
                 lvDir[k] = dir
                 lvFlush[k] = dir > 0.0 ? l : h
                 lvBars[k] = 1
@@ -555,6 +574,7 @@ on p5.close {
             let back = dir > 0.0 ? c > L : c < L
             lvBars[k] = (lvBars[k] ?? 0) + 1
             if st == 1 {
+              lvFlowOk[k] = (lvFlowOk[k] ?? false) && flowOk
               lvFlush[k] = dir > 0.0 ? math.min(lvFlush[k] ?? l, l) : math.max(lvFlush[k] ?? h, h)
               lvNew[k] = (lvNew[k] ?? 0.0) + (dir > 0.0 ? math.max(ns, 0.0) : math.max(nl, 0.0))
               lvStop[k] = (lvStop[k] ?? 0.0) + (dir > 0.0 ? longLiq : shortLiq)
@@ -572,6 +592,7 @@ on p5.close {
               if flushed || !back {
                 if !flushed && (lvBars[k] ?? 0) <= reclaimBars {
                   lvState[k] = 1
+                  lvFlowOk[k] = (lvFlowOk[k] ?? false) && flowOk
                   lvNew[k] = (lvNew[k] ?? 0.0) + (dir > 0.0 ? math.max(ns, 0.0) : math.max(nl, 0.0))
                   lvStop[k] = (lvStop[k] ?? 0.0) + (dir > 0.0 ? longLiq : shortLiq)
                   lvPv[k] = (lvPv[k] ?? 0.0) + pp * vv
@@ -589,7 +610,7 @@ on p5.close {
                     lastTrap.set(sideKey, now)
                     let pain = (lvV[k] ?? 0.0) > 0.0 ? (lvPv[k] ?? 0.0) / (lvV[k] ?? 1.0) : L
                     let name = str.format("{0} {1:,.0}", lvName[k] ?? "", L)
-                    addTrap(dir, t, lvFrom[k] ?? t, math.max(lvNew[k] ?? 0.0, 0.000000001), lvFlush[k] ?? L, pain, L, name, lvStop[k] ?? 0.0, false)
+                    addTrap(dir, t, lvFrom[k] ?? t, math.max(lvNew[k] ?? 0.0, 0.000000001), lvFlush[k] ?? L, pain, L, name, lvStop[k] ?? 0.0, false, lvFlowOk[k] ?? false)
                   }
                 }
               }
@@ -638,12 +659,12 @@ on chart.close {
       }
     }
 
-    // average entries: fade, then add the bar's new positions or take off its closes
+    // Fade proxy weights, add positive flow at HLC3, reduce weight on negative flow.
     let bv = useChart ? chart.buyVolume : (bnC.buyVolume ?? 0.0) + (bbC.buyVolume ?? 0.0) + (useAll ? (okC.buyVolume ?? 0.0) + (hlC.buyVolume ?? 0.0) : 0.0)
     let sv = useChart ? chart.sellVolume : (bnC.sellVolume ?? 0.0) + (bbC.sellVolume ?? 0.0) + (useAll ? (okC.sellVolume ?? 0.0) + (hlC.sellVolume ?? 0.0) : 0.0)
     let oo = oiAgg.open
     let oc = oiAgg.close
-    if bv != null && sv != null && oo != null && oc != null {
+    if flowReadyClosed(t) && oiAgg.time == t && bv != null && sv != null && oo != null && oc != null {
       let keep = math.pow(0.5, 1.0 / halfLife) ?? 1.0
       lQty = lQty * keep
       lCost = lCost * keep
@@ -670,6 +691,11 @@ on chart.close {
         sQty = sQty * f
         sCost = sCost * f
       }
+    } else {
+      lQty = 0.0
+      lCost = 0.0
+      sQty = 0.0
+      sCost = 0.0
     }
 
     // the bar's rows: the largest, the wicks, the zones and the net
@@ -772,10 +798,10 @@ on chart.close {
       if showWick && haveRef && range > 0.0 {
         let barEnd = time.fromUnixSeconds(int(unix(t) + float(time.tfSeconds(context.timeframe)) - 300.0) ?? 0)
         if (h - bodyTop) / range >= wickMin && upUsd >= trapMult * ref {
-          addTrap(-1.0, barEnd, t, math.max(upCoins, 0.000000001), h, upBuyCoins > 0.0 ? upBuyUsd / upBuyCoins : h, h, str.concat("wick ", money(upUsd)), 0.0, true)
+          addTrap(-1.0, barEnd, t, math.max(upCoins, 0.000000001), h, upBuyCoins > 0.0 ? upBuyUsd / upBuyCoins : h, h, str.concat("wick ", money(upUsd)), 0.0, true, false)
         }
         if (bodyLow - l) / range >= wickMin && -lowUsd >= trapMult * ref {
-          addTrap(1.0, barEnd, t, math.max(-lowCoins, 0.000000001), l, lowSellCoins < 0.0 ? lowSellUsd / lowSellCoins : l, l, str.concat("wick ", money(lowUsd)), 0.0, true)
+          addTrap(1.0, barEnd, t, math.max(-lowCoins, 0.000000001), l, lowSellCoins < 0.0 ? lowSellUsd / lowSellCoins : l, l, str.concat("wick ", money(lowUsd)), 0.0, true, false)
         }
       }
     }
@@ -824,7 +850,9 @@ on chart.update {
     let lc = lCost
     let sq = sQty
     let sc = sCost
-    if bv != null && sv != null && oo != null && oc != null && h != null && l != null && c != null {
+    let liveTime = chart.forming.time
+    let ready = liveTime != null && flowReadyLive(liveTime) && oiAgg.forming.time == liveTime
+    if ready && bv != null && sv != null && oo != null && oc != null && h != null && l != null && c != null {
       let d = bv - sv
       let dOi = oc - oo
       let nl = (dOi + d) / 2.0
@@ -847,17 +875,17 @@ on chart.update {
         sc = sc * f
       }
     }
-    let la = lq > 0.0 ? lc / lq : null
-    let sa = sq > 0.0 ? sc / sq : null
+    let la = ready && lq > 0.0 ? lc / lq : null
+    let sa = ready && sq > 0.0 ? sc / sq : null
     longLine.plot(la)
     shortLine.plot(sa)
     if chart.isLast && c != null {
       if la != null {
-        edge.get("L").set(8, la, str.format("Open longs avg entry {0:,.0} | {1:,.0} {3} | P&L {2:+.1%}", la, lq, c / la - 1.0, coin), color: longColor, size: textSize, textAlign: "right")
-      }
+        edge.get("L").set(8, la, str.format("+L flow price {0:,.0} | weight {1:,.0} {3} | distance {2:+.1%}", la, lq, c / la - 1.0, coin), color: longColor, size: textSize, textAlign: "right")
+      } else { edge.delete("L") }
       if sa != null {
-        edge.get("S").set(8, sa, str.format("Open shorts avg entry {0:,.0} | {1:,.0} {3} | P&L {2:+.1%}", sa, sq, sa / c - 1.0, coin), color: shortColor, size: textSize, textAlign: "right")
-      }
+        edge.get("S").set(8, sa, str.format("+S flow price {0:,.0} | weight {1:,.0} {3} | distance {2:+.1%}", sa, sq, c / sa - 1.0, coin), color: shortColor, size: textSize, textAlign: "right")
+      } else { edge.delete("S") }
     }
   }
 }

@@ -9,7 +9,8 @@ script "Swordfish Delta Heat"
 // Closed bars come from MMT's per-bar volume snapshots (the last 250 bars). MMT has no forming bar snapshot, so the
 // live bar is built from the completed one-minute snapshots since it opened (exact per row, at most a minute behind,
 // from any load time) and redrawn as each minute closes; when the bar closes, its own snapshot replaces that. (No live
-// trade tapes: they counted against MMT's live-feed limit, which FLIMP's eight tapes need on the same chart.)
+// trade tapes: they counted against MMT's live-feed limit, which FLIMP's tapes need on the same chart.)
+// Live reconstruction is limited to whole-minute chart timeframes from 1m through 4h.
 
 input (
   input.section(title: "Rows")
@@ -26,7 +27,9 @@ input (
 
 setup (
   // row size grows with the square root of the timeframe, as a bar's typical range does
-  tfScale = math.sqrt(float(time.tfSeconds(context.timeframe)) / 1800.0) ?? 1.0
+  tfSeconds = time.tfSeconds(context.timeframe)
+  liveSupported = tfSeconds >= 60 && tfSeconds <= 14400 && math.floor(float(tfSeconds) / 60.0) * 60.0 == float(tfSeconds)
+  tfScale = math.sqrt(float(tfSeconds) / 1800.0) ?? 1.0
   source = venue == "Binance + Bybit perps" ? markets.agg("binancef", "bybitf") : venue == "Chart venue" ? context.exchange : markets.agg("binancef", "bybitf", "hyperliquid", "okxf")
 )
 
@@ -75,14 +78,14 @@ fn row(lo: float, hi: float, usd: float, ref: float, biggest: float, strongest: 
 // The live bar: the completed minutes since it opened, redrawn as each minute closes.
 on clock.close {
   let mt = clock.time
-  if mt != null && step > 0.0 {
+  if liveSupported && mt != null && step > 0.0 {
     let barStart = time.floor(mt, context.timeframe)
     let barU = float(time.unixSeconds(barStart) ?? 0)
     let ref = math.max(peaks.avg() ?? 0.0, 0.000000001)
     // sum the bar's minutes into rows keyed by row index
     let lowRow = 1000000000000.0
     let highRow = -1000000000000.0
-    let span = math.min(240, math.max(1, int(math.floor(float(time.tfSeconds(context.timeframe)) / 60.0)) ?? 1))
+    let span = int(float(tfSeconds) / 60.0) ?? 1
     let more = true
     let sums = map<int, float>(2048)
     let vols = map<int, float>(2048)
@@ -110,11 +113,9 @@ on clock.close {
       let rows = int(highRow - lowRow) ?? 0
       let biggest = 0.0
       let strongest = -1
-      let net = 0.0
       for j in 0..(rows + 1) {
         let r = lowRow + float(j)
         let usd = (sums.get(int(r) ?? 0) ?? 0.0) * (r + 0.5) * step
-        net += usd
         if math.abs(usd) > biggest {
           biggest = math.abs(usd)
           strongest = j
@@ -133,6 +134,12 @@ on clock.close {
 }
 
 // Closed bars: the volume snapshot, once per bar.
+on chart.update {
+  if chart.isLast {
+    script.setTitle(liveSupported ? "Swordfish Delta Heat | live ladder up to 1m behind" : "Swordfish Delta Heat | closed bars only; live ladder needs whole-minute 1m-4h charts")
+  }
+}
+
 on chart.close {
   let price = chart.close
   let hh = chart.high
@@ -156,24 +163,16 @@ on chart.close {
       let at = b.time
       let prior = lastDrawn
       if prior == null || (prior != null && at > prior) {
-        // dollars per row, the bar's strongest row, its net delta and its lowest row
+        // Dollars per row and the bar's strongest row.
         let biggest = 0.0
         let strongest = -1
-        let net = 0.0
-        let low = 0.0
-        let haveLow = false
         for i in 0..b.len {
           let c = b.get(i)
           if c != null && c.total > 0.0 {
             let usd = c.delta * (c.from + c.to) / 2.0
-            net += usd
             if math.abs(usd) > biggest {
               biggest = math.abs(usd)
               strongest = i
-            }
-            if !haveLow {
-              low = c.from
-              haveLow = true
             }
           }
         }

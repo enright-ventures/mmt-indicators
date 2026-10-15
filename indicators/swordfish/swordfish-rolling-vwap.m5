@@ -2,7 +2,7 @@ script "Swordfish Rolling VWAP"
 
 // Rolling 7-day, 30-day and 365-day VWAPs: HLC3 x volume over the trailing window, every bar. 7D and 30D roll on 30m
 // candles (336 and 1,440 of them), so they move with each bar; 365D rolls on daily candles, so it steps once a day.
-// Each includes the candle still forming, so the live bar's value is current.
+// Each window contains N-1 closed candles plus the forming candle (N candles total).
 // Venues: Binance and Bybit perps pooled by default. Each venue keeps its own trailing window and the VWAP is their
 // summed price x volume over their summed volume (MMT gives scripts no combined candles). Both reach 2022 on MMT, so
 // the 365D window is full on both.
@@ -39,24 +39,24 @@ plot (
 
 state (
   // per venue (a = Binance, b = Bybit): trailing windows of price x volume and volume, with running sums
-  aPv7 = rolling<float>(336)
-  aV7 = rolling<float>(336)
-  aPv30 = rolling<float>(1440)
-  aV30 = rolling<float>(1440)
-  aPv365 = rolling<float>(365)
-  aV365 = rolling<float>(365)
+  aPv7 = rolling<float>(335)
+  aV7 = rolling<float>(335)
+  aPv30 = rolling<float>(1439)
+  aV30 = rolling<float>(1439)
+  aPv365 = rolling<float>(364)
+  aV365 = rolling<float>(364)
   aSpv7: float = 0.0
   aSv7: float = 0.0
   aSpv30: float = 0.0
   aSv30: float = 0.0
   aSpv365: float = 0.0
   aSv365: float = 0.0
-  bPv7 = rolling<float>(336)
-  bV7 = rolling<float>(336)
-  bPv30 = rolling<float>(1440)
-  bV30 = rolling<float>(1440)
-  bPv365 = rolling<float>(365)
-  bV365 = rolling<float>(365)
+  bPv7 = rolling<float>(335)
+  bV7 = rolling<float>(335)
+  bPv30 = rolling<float>(1439)
+  bV30 = rolling<float>(1439)
+  bPv365 = rolling<float>(364)
+  bV365 = rolling<float>(364)
   bSpv7: float = 0.0
   bSv7: float = 0.0
   bSpv30: float = 0.0
@@ -150,7 +150,7 @@ on bbD.close {
 
 // The pooled VWAP of the chosen venues, each with its forming candle added; null until every used window is full.
 fn pooled(fullA: bool, spvA: float, svA: float, fpvA: float?, fvA: float?, fullB: bool, spvB: float, svB: float, fpvB: float?, fvB: float?) -> float? {
-  if (useBn && !fullA) || (useBb && !fullB) { return null }
+  if (useBn && (!fullA || fpvA == null || fvA == null)) || (useBb && (!fullB || fpvB == null || fvB == null)) { return null }
   let pv = (useBn ? spvA + (fpvA ?? 0.0) : 0.0) + (useBb ? spvB + (fpvB ?? 0.0) : 0.0)
   let v = (useBn ? svA + (fvA ?? 0.0) : 0.0) + (useBb ? svB + (fvB ?? 0.0) : 0.0)
   return v > 0.0 ? pv / v : null
@@ -172,8 +172,8 @@ on chart.update {
   line30.plot(a30)
   line365.plot(a365)
   if labels && chart.isLast {
-    if a7 != null { tags.get("7").set(8, a7, "7D", color: color7, size: 14, textAlign: "right") }
-    if a30 != null { tags.get("30").set(8, a30, "30D", color: color30, size: 14, textAlign: "right") }
-    if a365 != null { tags.get("365").set(8, a365, "365D", color: color365, size: 14, textAlign: "right") }
+    if a7 != null { tags.get("7").set(8, a7, "7D", color: color7, size: 14, textAlign: "right") } else { tags.delete("7") }
+    if a30 != null { tags.get("30").set(8, a30, "30D", color: color30, size: 14, textAlign: "right") } else { tags.delete("30") }
+    if a365 != null { tags.get("365").set(8, a365, "365D", color: color365, size: 14, textAlign: "right") } else { tags.delete("365") }
   }
 }
