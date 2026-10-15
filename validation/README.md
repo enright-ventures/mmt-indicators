@@ -3,7 +3,7 @@
 ## Review-fix verification (2026-10-15)
 
 - 18 regression tests pass: quote mapping, empty/partial/failed watchlist replacement and recovery snapshots, retained markets, fixed-side traps, reclaim-bar flow, missing flow, invalidation/expiry, and Monday week boundaries.
-- MMT `script_check` returned `{"status":"ok","errors":[]}` for all six changed indicators: Offside, Bar Stats, Positioning NL/NS, Rolling VWAP, Delta Heat and FLIMP.
+- MMT `script_check` returned `{"status":"ok","errors":[]}` for the changed indicators: Offside, Bar Stats, Positioning NL/NS, Rolling VWAP and Delta Heat.
 - Changed Python files compile; `git diff --check` passes. Basedpyright on the new engine, importer and tests reports zero errors and 176 warnings, chiefly dynamic/untyped JSON and legacy helper interfaces; this is not a clean type-check gate.
 - Runtime charts were not updated. Compiler checks do not establish live feed synchronization, subscription performance or visual rendering. Watchlist tests use a stateful fake service and do not mutate a real watchlist. Rolling exchange comparisons have not been rerun for the revised window.
 

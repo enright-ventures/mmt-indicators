@@ -124,7 +124,6 @@ html { scroll-behavior: smooth; }
     <li class="sub"><a href="#backtest">Backtest</a></li>
     <li><a href="#barstats">Bar Stats</a></li>
     <li><a href="#builtins">Open Interest, Delta Volume</a></li>
-    <li><a href="#flimp">FLIMP workspace</a></li>
     <li><a href="#data">Data and checks</a></li>
     <li><a href="#files">Scripts and files</a></li>
   </ol>
@@ -135,7 +134,7 @@ html { scroll-behavior: smooth; }
   <p class="eyebrow">MMT workspace · BTC/USD perps · 30m</p>
   <h1>Swordfish Indicator Guide</h1>
   <p class="lede">What each indicator on the Swordfish chart draws, how to read it, which settings matter, and how far each one has been checked against outside data.</p>
-  <p class="meta">Written 15 Oct 2026. Covers the six Swordfish scripts, MMT's built-in Open Interest and Delta Volume panes, and the separate FLIMP workspace.</p>
+  <p class="meta">Written 15 Oct 2026. Covers the six Swordfish scripts and MMT's built-in Open Interest and Delta Volume panes.</p>
 </header>
 
 <h2 id="layout">The Swordfish chart</h2>
@@ -335,15 +334,6 @@ html { scroll-behavior: smooth; }
 </ul>
 <p>They are MMT's own panes; their data source is set in each pane's settings (gear beside the name) under Aggregate → Markets.</p>
 
-<h2 id="flimp">FLIMP workspace</h2>
-<p class="tagline">FLIMP BTC Aquarium v5 (FLIMP's script) has its own MMT workspace, "FLIMP": one 5m BTC/USD chart.</p>
-<ul class="tight">
-  <li><b>Tanks:</b> live prints appear as bubbles sized by BTC, perps on the left and spot on the right. Each tank has a "waterfall" of resting liquidity: outline = the wall nearest price, solid = what hit it. A verdict line reads absorption versus pushing through.</li>
-  <li><b>Changes from the original:</b> four venues (Binance and Bybit perps, Binance and Coinbase spot), live-only feeds, and order books every 30 seconds instead of 5. MMT keeps every full-depth book snapshot, and at 5 seconds that froze the tank within hours.</li>
-  <li><b>Start-up:</b> it takes a few minutes after a page load before bubbles move.</li>
-  <li><b>Sizing:</b> set the Tank width and height inputs to the pane's pixel size.</li>
-</ul>
-
 <h2 id="data">Data and checks</h2>
 <div class="table-wrap"><table>
   <thead><tr><th>Indicator</th><th>Data</th><th>Checked against</th><th>Result</th></tr></thead>
@@ -368,7 +358,6 @@ html { scroll-behavior: smooth; }
     <tr><td>Swordfish Delta Heat</td><td class="mono">indicators/swordfish/swordfish-delta-heat.m5</td></tr>
     <tr><td>Swordfish Offside</td><td class="mono">indicators/swordfish/swordfish-offside.m5</td></tr>
     <tr><td>Swordfish Bar Stats</td><td class="mono">indicators/swordfish/swordfish-bar-stats.m5</td></tr>
-    <tr><td>FLIMP BTC Aquarium v5</td><td class="mono">indicators/third-party/flimp-btc-aquarium-v5.m5</td></tr>
     <tr><td>Backtests</td><td class="mono">validation/offside_traps.py, offside_traps_levels.py, offside_traps_htf.py, offside_traps_holdout.py, offside_traps_mmt_replica.py (wick method: offside_rows.py, offside_backtest.py, offside_fuel.py)</td></tr>
     <tr><td>TradingView watchlist import</td><td class="mono">tools/tv_watchlist_import.py</td></tr>
   </tbody>

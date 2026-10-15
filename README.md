@@ -13,7 +13,6 @@ The full reference, with a visual key for every line and marker, is [`docs/sword
 |---|---|
 | [`indicators/swordfish/`](indicators/swordfish) | The six Swordfish indicators (below) |
 | [`indicators/other/`](indicators/other) | Earlier stand-alone scripts kept as they are in MMT: Value Area Levels, OI Delta, Positioning NL/NS/OI, Delta Footprint |
-| [`indicators/third-party/`](indicators/third-party) | FLIMP BTC Aquarium v5, by FLIMP, with this repo's data-feed changes (see below) |
 | [`tools/`](tools) | TradingView watchlist importer and the source of the "Import to MMT" Mac app |
 | [`docs/swordfish-guide.html`](docs/swordfish-guide.html) | The guide: what each indicator draws, how to read it, settings, data and checks |
 | [`validation/`](validation) | Reference implementations, cross-checks and backtests, with results in [`validation/README.md`](validation/README.md) |
@@ -118,16 +117,6 @@ and a preview, then replaces the watchlist. Set the paths at the top of the scri
 ```bash
 osacompile -o ~/Applications/"Import to MMT.app" tools/import-to-mmt.applescript
 ```
-
-## FLIMP BTC Aquarium
-
-`indicators/third-party/flimp-btc-aquarium-v5.m5` is FLIMP's script, included for reference. It has these changes:
-- four venues: Binance and Bybit perps, Binance and Coinbase spot;
-- live-only feeds; only these four venues have controls and appear in the status readout;
-- order books every 30 seconds instead of 5, because MMT keeps every full-depth snapshot and at 5 seconds the tank froze
-  within hours.
-
-All credit for the design is FLIMP's.
 
 ## Regression checks
 

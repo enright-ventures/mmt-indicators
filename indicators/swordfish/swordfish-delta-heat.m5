@@ -9,7 +9,7 @@ script "Swordfish Delta Heat"
 // Closed bars come from MMT's per-bar volume snapshots (the last 250 bars). MMT has no forming bar snapshot, so the
 // live bar is built from the completed one-minute snapshots since it opened (exact per row, at most a minute behind,
 // from any load time) and redrawn as each minute closes; when the bar closes, its own snapshot replaces that. (No live
-// trade tapes: they counted against MMT's live-feed limit, which FLIMP's tapes need on the same chart.)
+// trade tapes: they count against MMT's live-feed limit.)
 // Live reconstruction is limited to whole-minute chart timeframes from 1m through 4h.
 
 input (
