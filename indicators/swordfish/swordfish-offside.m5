@@ -9,8 +9,8 @@ script "Swordfish Offside"
 // pressers' volume-weighted average fill, the share in large prints, and the opposite aggression back on the
 // reclaimed side from the reclaim through the hold ("reclaim x" = back / pressed; workshop 11's reclaim-on-volume).
 // Estimated from 5m candles and open interest: +S = (dOI - delta) / 2 and +L = (dOI + delta) / 2 are signed flow
-// proxies; they suggest positions opened or closed but cannot identify who. "Est. new shorts" sums +S over the break;
-// "est. covered" sums -S after the hold against it, and the trap ends "fully unwound (est.)" at 100%. Measured net
+// proxies, not identified positions. Break flow sums the positive proxy over the break, including the reclaim bar;
+// counterflow sums its opposite sign after the hold. Neither estimate ends price tracking. Measured net
 // flow since the hold is shown beside it. Flow readings use only venues that list the coin, and a bar with a missing
 // or misaligned candle or OI reading is skipped, not guessed.
 // Wick markers (off by default), delta divergence and reaction zones are separate contextual overlays.
@@ -25,11 +25,11 @@ input (
   useVwapM = input.bool(false, title: "monthly", sameLine: true)
   useVwapQ = input.bool(false, title: "quarterly (and older quarters)", sameLine: true)
   useVwapY = input.bool(false, title: "yearly", sameLine: true)
-  showFuel = input.bool(true, title: "Show fuel (est.) and the pressers' average fill")
+  showFuel = input.bool(true, title: "Show flow proxies and the pressers' average fill")
   trackHours = input.int(24, title: "Stop tracking after hours", min: 1, max: 168, sameLine: true)
   input.section(title: "Trades (MMT Ultra)")
   useTrades = input.bool(true, title: "Measure the break from individual trades", description: "Needs MMT Ultra (historical trades in scripts). Without it, only trades since the script started are measured.")
-  tradeHours = input.int(24, title: "Trade history (hours)", min: 1, max: 168, description: "Traps older than this show proxies only. Longer history loads more trades: about 300,000 a day on BTC across four perps.")
+  tradeHours = input.int(24, title: "Trade history (hours)", min: 1, max: 168, description: "Traps older than this show proxies only. Longer history loads more trades: all prints are loaded to verify coverage against each venue's candle volume.")
   bigUsd = input.float(100000.0, title: "Large print from ($)", min: 1000.0)
   input.section(title: "Old wick markers")
   showWick = input.bool(false, title: "Trapped-wick markers (the earlier method)")
@@ -69,8 +69,6 @@ setup (
   holdBars = math.max(1, int(math.floor(float(holdMin) / 5.0)) ?? 3)
   reclaimBars = math.max(1, int(math.floor(float(reclaimMin) / 5.0)) ?? 12)
   anyVwap = useVwapW || useVwapM || useVwapQ || useVwapY
-  // trade size floor: drops dust prints (on Binance BTC, 0.05 BTC keeps 96% of volume with a fifth of the trades)
-  minTrade = str.startsWith(context.symbol, "btc") ? 0.05 : str.startsWith(context.symbol, "eth") ? 1.0 : str.startsWith(context.symbol, "sol") ? 10.0 : 0.0
   tradeHist = useTrades ? time.hours(tradeHours) : time.seconds(0)
   noHist = time.seconds(0)
   usePair = venue == "Binance + Bybit perps"
@@ -94,11 +92,11 @@ data (
   oi5 = subscribe(data.oi, exchange: source, timeframe: 5m, history: 1500)
   liq5 = subscribe(data.stat, exchange: source, timeframe: 5m, history: 1500)
   // individual trades for the break measurements (history needs MMT Ultra)
-  tBn = subscribe(data.trades, exchange: "binancef", minSize: minTrade > 0.0 ? minTrade : null, history: useTrades && (useAll || usePair) ? tradeHist : noHist)
-  tBb = subscribe(data.trades, exchange: "bybitf", minSize: minTrade > 0.0 ? minTrade : null, history: useTrades && (useAll || usePair) ? tradeHist : noHist)
-  tOk = subscribe(data.trades, exchange: "okxf", minSize: minTrade > 0.0 ? minTrade : null, history: useTrades && useAll ? tradeHist : noHist)
-  tHl = subscribe(data.trades, exchange: "hyperliquid", minSize: minTrade > 0.0 ? minTrade : null, history: useTrades && useAll ? tradeHist : noHist)
-  tCh = subscribe(data.trades, minSize: minTrade > 0.0 ? minTrade : null, history: useTrades && useChart ? tradeHist : noHist)
+  tBn = subscribe(data.trades, exchange: "binancef", history: useTrades && (useAll || usePair) ? tradeHist : noHist)
+  tBb = subscribe(data.trades, exchange: "bybitf", history: useTrades && (useAll || usePair) ? tradeHist : noHist)
+  tOk = subscribe(data.trades, exchange: "okxf", history: useTrades && useAll ? tradeHist : noHist)
+  tHl = subscribe(data.trades, exchange: "hyperliquid", history: useTrades && useAll ? tradeHist : noHist)
+  tCh = subscribe(data.trades, history: useTrades && useChart ? tradeHist : noHist)
   // levels: 4h swings and, when any VWAP level is on, the VWAPs (a year and a half of 4h candles)
   h4 = subscribe(data.ohlcv, timeframe: 4h, history: anyVwap ? 3300 : 300)
 )
@@ -114,8 +112,8 @@ window traps = window(title: "Recent traps") {
     table.col(title: "Reclaim x", align: align.right),
     table.col(title: "Stopped out", align: align.right),
     table.col(title: "Stop", align: align.right),
-    table.col(title: "Est. new", align: align.right),
-    table.col(title: "Est. covered", align: align.right),
+    table.col(title: "Break flow proxy", align: align.right),
+    table.col(title: "Counterflow proxy", align: align.right),
     table.col(title: "Net flow since", align: align.right),
     table.col(title: "Status", width: 1.3),
   ], title: "Traps", capacity: 60),
@@ -250,6 +248,14 @@ state (
   bTotBuy: float = 0.0
   bTotBuyPv: float = 0.0
   bTotBuyBig: float = 0.0
+  // Raw buy/sell totals per selected venue (Binance, Bybit, OKX, Hyperliquid, chart).
+  // The most recently measured bar survives rollover until its candle-close handler checks coverage.
+  bVenueBuy = float[](5)
+  bVenueSell = float[](5)
+  measuredBuy = float[](5)
+  measuredSell = float[](5)
+  measuredTime: float = 0.0
+  measuredGood: bool = false
   // per level, one 5m bar's trades measured against it (mBar = that bar): sells below and buys above
   mBar = float[](120)
   mSell = float[](120)
@@ -351,7 +357,15 @@ fn measureLevel(k: int, L: float) {
 
 // The bar's trades measured against every level still watched or under test.
 fn measureAll() {
-  if bN > 0 && !bBad {
+  measuredTime = bTime
+  measuredGood = bN > 0 && !bBad
+  measuredBuy.clear()
+  measuredSell.clear()
+  for i in 0..5 {
+    measuredBuy.push(bVenueBuy[i] ?? 0.0)
+    measuredSell.push(bVenueSell[i] ?? 0.0)
+  }
+  if measuredGood {
     for k in 0..lvP.len {
       if (lvState[k] ?? 3) != 3 { measureLevel(k, lvP[k] ?? 0.0) }
     }
@@ -360,13 +374,19 @@ fn measureAll() {
 
 // One trade into its 5m bar's price rows. A trade from a later bar measures the finished bar and starts a new one;
 // a late trade from an earlier bar is dropped.
-fn onTrade(p: float, sz: float, buy: bool, tt: time) {
+fn onTrade(p: float, sz: float, buy: bool, tt: time, venueId: int) {
   let k = math.floor(unix(tt) / 300.0) * 300.0
-  if k < bTime || p <= 0.0 { return }
+  if k < bTime || !math.isFinite(p) || !math.isFinite(sz) || p <= 0.0 || sz <= 0.0 { return }
   if k > bTime {
     measureAll()
     bTime = k
     bN = 0
+    bVenueBuy.clear()
+    bVenueSell.clear()
+    for i in 0..5 {
+      bVenueBuy.push(0.0)
+      bVenueSell.push(0.0)
+    }
     bBase = p
     bW = p * 0.0001
     bLo = p
@@ -387,6 +407,11 @@ fn onTrade(p: float, sz: float, buy: bool, tt: time) {
     bTotBuyBig = 0.0
   }
   bN += 1
+  if buy {
+    bVenueBuy[venueId] = (bVenueBuy[venueId] ?? 0.0) + sz
+  } else {
+    bVenueSell[venueId] = (bVenueSell[venueId] ?? 0.0) + sz
+  }
   bLo = math.min(bLo, p)
   bHi = math.max(bHi, p)
   let row = int(math.floor((p - bBase) / bW)) ?? 0
@@ -517,7 +542,7 @@ fn drawTrap(k: int, now: time) {
   let wick = fWick[k] ?? false
   // short captions on the lines: what the line is, and how the trap stands
   let st = fStatus[k] ?? ""
-  let brief = live ? "holding" : str.startsWith(st, "failed") ? "failed" : str.startsWith(st, "fully") ? "unwound (est.)" : "ended"
+  let brief = live ? "holding" : str.startsWith(st, "failed") ? "failed" : "ended"
   if showFuel {
     let cap = wick ? "wick break-even" : tradeOk ? (side > 0.0 ? "sellers' avg fill below level" : "buyers' avg fill above level") : "break VWAP"
     painLines.get(k).set(at, pain, now, pain, width: 1.5, color: color.withAlpha(tint, live ? 220 : 90), style: linestyle.dotted, text: cap)
@@ -529,7 +554,6 @@ fn drawTrap(k: int, now: time) {
   }
   let pressed = fPressed[k] ?? 0.0
   let flowOk = fFlowOk[k] ?? false
-  let qty = math.max(fQty[k] ?? 0.0, 0.000000001)
   traps.list.row(str.format("slot{0}", k),
     time.format(at, "{MM}-{DD} {HH}:{mm}"),
     table.cell(side < 0.0 ? "Longs" : "Shorts", fg: tint),
@@ -541,7 +565,7 @@ fn drawTrap(k: int, now: time) {
     wick ? "-" : str.format("{0:,.0} {1}", fStopped[k] ?? 0.0, coin),
     str.format("{0:,.0}", fExt[k] ?? 0.0),
     flowOk ? str.format("{0:,.0} {1}", fQty[k] ?? 0.0, coin) : "-",
-    (fCounterOk[k] ?? false) && flowOk ? str.format("{0:.0%}", (fDone[k] ?? 0.0) / qty) : "-",
+    (fCounterOk[k] ?? false) && flowOk ? str.format("{0:,.0} {1}", fDone[k] ?? 0.0, coin) : "-",
     (fCounterOk[k] ?? false) ? str.format("{0:+,.0} {1}", fNet[k] ?? 0.0, coin) : "-",
     fStatus[k] ?? "")
 }
@@ -553,17 +577,16 @@ fn trapLine(k: int, name: string) -> string {
   let wick = fWick[k] ?? false
   let tradeOk = fTradeOk[k] ?? false
   let pressed = fPressed[k] ?? 0.0
-  let qty = math.max(fQty[k] ?? 0.0, 0.000000001)
   let measured = wick ? str.format("{0:,.0} {1} in the wick", fQty[k] ?? 0.0, coin) :
     tradeOk ? str.format("pressed {0:,.0} {1} {2} at avg {3:,.0} ({4:.0%} large) | reclaim {5:.1}x", pressed, coin, side > 0.0 ? "below" : "above", fFill[k] ?? 0.0, pressed > 0.0 ? (fBig[k] ?? 0.0) / pressed : 0.0, pressed > 0.0 ? (fBack[k] ?? 0.0) / pressed : 0.0) :
     str.format("no trade data | break VWAP {0:,.0}", fFill[k] ?? 0.0)
   let stopped = wick ? "" : str.format(" | {0:,.0} {1} liq", fStopped[k] ?? 0.0, side > 0.0 ? "longs" : "shorts")
-  let est = (fFlowOk[k] ?? false) && (fCounterOk[k] ?? false) ? str.format(" | est. {0:.0%} covered", math.min((fDone[k] ?? 0.0) / qty, 9.99)) : ""
+  let est = (fCounterOk[k] ?? false) ? str.format(" | counterflow proxy {0:,.0} {1}", fDone[k] ?? 0.0, coin) : " | counterflow unavailable"
   return str.concat(name, " ", at != null ? time.format(at, "{MM}-{DD} {HH}:{mm} UTC") : "", " | ", fName[k] ?? "", " | ", measured, stopped,
     " | stop ", str.format("{0:,.0}", fExt[k] ?? 0.0), showFuel ? est : "", " | ", fStatus[k] ?? "")
 }
 
-// A new trap into the next ring slot, with its marker. qty is the est. new positions (proxy); pressed, fill, big
+// A new trap into the next ring slot, with its marker. qty is the positive break-flow proxy; pressed, fill, big
 // and back come from trades when tradeOk.
 fn addTrap(side: float, at: time, from: time, qty: float, ext: float, pain: float, lvl: float, name: string, stopped: float, wick: bool, flowOk: bool, pressed: float, avgFill: float, big: float, back: float, tradeOk: bool) {
   let k = fNext
@@ -618,7 +641,7 @@ fn addTrap(side: float, at: time, from: time, qty: float, ext: float, pain: floa
   fNext = k + 1 >= 40 ? 0 : k + 1
   if side < 0.0 { nTL += 1 } else { nTS += 1 }
   // The marker sits beyond the flush extreme; bigger when more was pressed (trades) than the recent traps' average,
-  // or, without trade data, when the est. new positions were above average.
+  // or, without trade data, when the positive break-flow proxy was above average.
   let many = tradeOk ? pressed > (recentPressed.avg() ?? pressed) : flowOk && qty > (recentNew.avg() ?? qty)
   if tradeOk { recentPressed.push(pressed) }
   if flowOk { recentNew.push(qty) }
@@ -700,21 +723,21 @@ fn developing(u: int, t: time) {
 
 on tBn.trade(tr) {
   ensureListed()
-  if useTrades && (useAll || usePair) && lsBn { onTrade(tr.price, tr.size, tr.isBuy, tr.time) }
+  if useTrades && (useAll || usePair) && lsBn { onTrade(tr.price, tr.size, tr.isBuy, tr.time, 0) }
 }
 on tBb.trade(tr) {
   ensureListed()
-  if useTrades && (useAll || usePair) && lsBb { onTrade(tr.price, tr.size, tr.isBuy, tr.time) }
+  if useTrades && (useAll || usePair) && lsBb { onTrade(tr.price, tr.size, tr.isBuy, tr.time, 1) }
 }
 on tOk.trade(tr) {
   ensureListed()
-  if useTrades && useAll && lsOk { onTrade(tr.price, tr.size, tr.isBuy, tr.time) }
+  if useTrades && useAll && lsOk { onTrade(tr.price, tr.size, tr.isBuy, tr.time, 2) }
 }
 on tHl.trade(tr) {
   ensureListed()
-  if useTrades && useAll && lsHl { onTrade(tr.price, tr.size, tr.isBuy, tr.time) }
+  if useTrades && useAll && lsHl { onTrade(tr.price, tr.size, tr.isBuy, tr.time, 3) }
 }
-on tCh.trade(tr) { if useTrades && useChart { onTrade(tr.price, tr.size, tr.isBuy, tr.time) }
+on tCh.trade(tr) { if useTrades && useChart { onTrade(tr.price, tr.size, tr.isBuy, tr.time, 4) }
 }
 
 // 4h swing highs and lows: the middle of the last 7 bars, below (above) the 3 before and not above (below) the 3 after.
@@ -745,20 +768,38 @@ on h4.close {
   }
 }
 
-// One 5m bar's trades credited to a broken level: pressed beyond it and the opposite aggression back on its side.
-// The break bar's opposite aggression counts only if that bar also reclaims. A bar without trade data marks the
-// level's trade readings unavailable.
-fn creditBar(k: int, dir: float, now: float, withBack: bool) {
-  let ok = useTrades && (mBar[k] ?? 0.0) == now
+// Require both sides of each selected venue's unfiltered tape to match its aligned candle.
+// A partial first bar, a delayed venue, or discarded late trades cannot be labelled complete.
+// Tolerance covers floating-point summation only (one part per million, or 1e-8 coins).
+fn volumeMatches(actual: float, expected: float?) -> bool {
+  if expected == null { return false }
+  return math.isFinite(expected) && expected >= 0.0 && math.abs(actual - expected) <= math.max(0.00000001, math.abs(expected) * 0.000001)
+}
+
+fn venueCovered(i: int, bv: float?, sv: float?) -> bool {
+  return volumeMatches(measuredBuy[i] ?? 0.0, bv) && volumeMatches(measuredSell[i] ?? 0.0, sv)
+}
+
+fn tradeCoverageReady(t: time) -> bool {
+  if !useTrades || !measuredGood || measuredTime != unix(t) || !flowReady5(t) { return false }
+  if useChart { return venueCovered(4, p5.buyVolume, p5.sellVolume) }
+  return (!lsBn || venueCovered(0, bn5.buyVolume, bn5.sellVolume)) && (!lsBb || venueCovered(1, bb5.buyVolume, bb5.sellVolume)) &&
+    (!useAll || ((!lsOk || venueCovered(2, ok5.buyVolume, ok5.sellVolume)) && (!lsHl || venueCovered(3, hl5.buyVolume, hl5.sellVolume))))
+}
+
+// Pressed covers broken bars through the reclaim close. Back covers the successful reclaim through the hold.
+// Every included bar must have complete trade coverage, including holding bars with no pressing credited.
+fn creditBar(k: int, dir: float, now: float, withPressed: bool, withBack: bool, covered: bool) {
+  let ok = covered && (mBar[k] ?? 0.0) == now
   if ok && dir > 0.0 {
-    lvPressed[k] = (lvPressed[k] ?? 0.0) + (mSell[k] ?? 0.0)
-    lvPressedPv[k] = (lvPressedPv[k] ?? 0.0) + (mSellPv[k] ?? 0.0)
-    lvBig[k] = (lvBig[k] ?? 0.0) + (mSellBig[k] ?? 0.0)
+    lvPressed[k] = (lvPressed[k] ?? 0.0) + (withPressed ? (mSell[k] ?? 0.0) : 0.0)
+    lvPressedPv[k] = (lvPressedPv[k] ?? 0.0) + (withPressed ? (mSellPv[k] ?? 0.0) : 0.0)
+    lvBig[k] = (lvBig[k] ?? 0.0) + (withPressed ? (mSellBig[k] ?? 0.0) : 0.0)
     lvBack[k] = (lvBack[k] ?? 0.0) + (withBack ? (mBuy[k] ?? 0.0) : 0.0)
   } else if ok && dir < 0.0 {
-    lvPressed[k] = (lvPressed[k] ?? 0.0) + (mBuy[k] ?? 0.0)
-    lvPressedPv[k] = (lvPressedPv[k] ?? 0.0) + (mBuyPv[k] ?? 0.0)
-    lvBig[k] = (lvBig[k] ?? 0.0) + (mBuyBig[k] ?? 0.0)
+    lvPressed[k] = (lvPressed[k] ?? 0.0) + (withPressed ? (mBuy[k] ?? 0.0) : 0.0)
+    lvPressedPv[k] = (lvPressedPv[k] ?? 0.0) + (withPressed ? (mBuyPv[k] ?? 0.0) : 0.0)
+    lvBig[k] = (lvBig[k] ?? 0.0) + (withPressed ? (mBuyBig[k] ?? 0.0) : 0.0)
     lvBack[k] = (lvBack[k] ?? 0.0) + (withBack ? (mSell[k] ?? 0.0) : 0.0)
   }
   lvTradeOk[k] = (lvTradeOk[k] ?? false) && ok
@@ -776,6 +817,7 @@ on p5.close {
     let now = unix(t)
     // this bar's trades against every level, if they have all arrived (otherwise the next bar's first trade does it)
     if useTrades && bTime == now { measureAll() }
+    let tradesCovered = tradeCoverageReady(t)
     // Signed flow proxies over the chosen venues.
     let bv = useChart ? (p5.buyVolume ?? 0.0) : (bn5.buyVolume ?? 0.0) + (bb5.buyVolume ?? 0.0) + (useAll ? (ok5.buyVolume ?? 0.0) + (hl5.buyVolume ?? 0.0) : 0.0)
     let sv = useChart ? (p5.sellVolume ?? 0.0) : (bn5.sellVolume ?? 0.0) + (bb5.sellVolume ?? 0.0) + (useAll ? (ok5.sellVolume ?? 0.0) + (hl5.sellVolume ?? 0.0) : 0.0)
@@ -801,16 +843,15 @@ on p5.close {
           fDone[k] = done
           fNet[k] = (fNet[k] ?? 0.0) + (side > 0.0 ? d : -d)
         }
-        let spent = (fFlowOk[k] ?? false) && (fCounterOk[k] ?? false) && done >= (fQty[k] ?? 0.0)
         let lvl = fLvl[k] ?? 0.0
         let ext = fExt[k] ?? 0.0
         let wick = fWick[k] ?? false
         let back = !wick && (side > 0.0 ? c < lvl : c > lvl)
         let flushed = side > 0.0 ? l < ext : h > ext
         let expired = now - unix(fTime[k] ?? t) >= float(trackHours) * 3600.0
-        if back || flushed || spent || expired {
+        if back || flushed || expired {
           fLive[k] = false
-          fStatus[k] = back ? (side > 0.0 ? "failed: closed back below the level" : "failed: closed back above the level") : flushed ? (wick ? (side > 0.0 ? "closed below wick" : "closed above wick") : (side > 0.0 ? "failed: flush low taken" : "failed: flush high taken")) : spent ? "fully unwound (est.)" : str.format("tracked {0}h, ended", trackHours)
+          fStatus[k] = back ? (side > 0.0 ? "failed: closed back below the level" : "failed: closed back above the level") : flushed ? (wick ? (side > 0.0 ? "closed below wick" : "closed above wick") : (side > 0.0 ? "failed: flush low taken" : "failed: flush high taken")) : str.format("tracked {0}h, ended", trackHours)
         }
         drawTrap(k, t)
       }
@@ -849,7 +890,7 @@ on p5.close {
                 lvBig[k] = 0.0
                 lvBack[k] = 0.0
                 lvTradeOk[k] = useTrades
-                creditBar(k, dir, now, dir > 0.0 ? c > L : c < L)
+                creditBar(k, dir, now, true, dir > 0.0 ? c > L : c < L, tradesCovered)
                 if dir > 0.0 ? c > L : c < L { lvState[k] = 2 }
               }
             }
@@ -857,8 +898,8 @@ on p5.close {
             let dir = lvDir[k] ?? 0.0
             let back = dir > 0.0 ? c > L : c < L
             lvBars[k] = (lvBars[k] ?? 0) + 1
-            creditBar(k, dir, now, true)
             if st == 1 {
+              creditBar(k, dir, now, true, back, tradesCovered)
               lvFlowOk[k] = (lvFlowOk[k] ?? false) && flowOk
               lvFlush[k] = dir > 0.0 ? math.min(lvFlush[k] ?? l, l) : math.max(lvFlush[k] ?? h, h)
               lvNew[k] = (lvNew[k] ?? 0.0) + (dir > 0.0 ? math.max(ns, 0.0) : math.max(nl, 0.0))
@@ -877,6 +918,9 @@ on p5.close {
               if flushed || !back {
                 if !flushed && (lvBars[k] ?? 0) <= reclaimBars {
                   lvState[k] = 1
+                  // Failed reclaim: discard its back-volume before another attempt.
+                  lvBack[k] = 0.0
+                  creditBar(k, dir, now, true, false, tradesCovered)
                   lvFlowOk[k] = (lvFlowOk[k] ?? false) && flowOk
                   lvNew[k] = (lvNew[k] ?? 0.0) + (dir > 0.0 ? math.max(ns, 0.0) : math.max(nl, 0.0))
                   lvStop[k] = (lvStop[k] ?? 0.0) + (dir > 0.0 ? longLiq : shortLiq)
@@ -886,6 +930,7 @@ on p5.close {
                   lvState[k] = fixed != 0.0 ? 3 : 0
                 }
               } else {
+                creditBar(k, dir, now, false, true, tradesCovered)
                 lvHeld[k] = (lvHeld[k] ?? 0) + 1
                 if (lvHeld[k] ?? 0) >= holdBars {
                   lvState[k] = 3
@@ -897,7 +942,7 @@ on p5.close {
                     let name = str.format("{0} {1:,.0}", lvName[k] ?? "", L)
                     let pr = lvPressed[k] ?? 0.0
                     let tOk = (lvTradeOk[k] ?? false) && pr > 0.0
-                    addTrap(dir, t, lvFrom[k] ?? t, math.max(lvNew[k] ?? 0.0, 0.000000001), lvFlush[k] ?? L, pain, L, name, lvStop[k] ?? 0.0, false, lvFlowOk[k] ?? false, pr, tOk ? (lvPressedPv[k] ?? 0.0) / pr : pain, lvBig[k] ?? 0.0, lvBack[k] ?? 0.0, tOk)
+                    addTrap(dir, t, lvFrom[k] ?? t, lvNew[k] ?? 0.0, lvFlush[k] ?? L, pain, L, name, lvStop[k] ?? 0.0, false, lvFlowOk[k] ?? false, pr, tOk ? (lvPressedPv[k] ?? 0.0) / pr : pain, lvBig[k] ?? 0.0, lvBack[k] ?? 0.0, tOk)
                   }
                 }
               }

@@ -206,7 +206,7 @@ html { scroll-behavior: smooth; }
 </dl>
 
 <h2 id="offside">Swordfish Offside</h2>
-<p class="tagline">Where traders are caught offside, following Stable workshop 11: a level that matters breaks, price reclaims it, and the reclaim holds. Each break is measured from individual trades (MMT Ultra), with estimated new and covered positions beside it.</p>
+<p class="tagline">Where traders are caught offside, following Stable workshop 11: a level that matters breaks, price reclaims it, and the reclaim holds. Each break is measured from individual trades (MMT Ultra), with break-flow and counterflow proxies beside it.</p>
 
 <h3 id="offside-key">Key</h3>
 <div class="key">
@@ -249,13 +249,13 @@ html { scroll-behavior: smooth; }
   <li><b>The hold (the trigger).</b> The next three 5m closes (15 minutes) stay on the reclaimed side and the flush extreme is not taken. If a close slips back through within the hour, the break continues; if the flush extreme is taken, there is no trap.</li>
   <li><b>Measured from trades</b> (MMT Ultra, the last 24 hours by default, Binance, Bybit, OKX and Hyperliquid perps). Each 5m bar's trades are bucketed into 0.01% price rows, and every level under test is measured from them:
     <ul class="tight">
-      <li><b>Pressed:</b> aggressive selling executed below a broken support from the break through the hold (buying above a broken resistance for failed breakouts).</li>
+      <li><b>Pressed:</b> aggressive selling executed below a broken support on broken bars through the reclaim close (buying above a broken resistance for failed breakouts); holding bars do not add pressing.</li>
       <li><b>Avg fill:</b> the volume-weighted price of that pressing.</li>
       <li><b>Large:</b> the share of it in prints of $100k or more.</li>
-      <li><b>Reclaim x:</b> the opposite aggression back on the reclaimed side, from the reclaim through the hold, divided by the pressed size. Workshop 11's reclaim on volume: above 1, more came back than pressed.</li>
+      <li><b>Reclaim x:</b> the opposite aggression back on the reclaimed side, from the successful reclaim through the hold, divided by the pressed size. A failed reclaim resets this back-volume before another attempt. Workshop 11's reclaim on volume: above 1, more came back than pressed.</li>
     </ul>
-    Trades below 0.05 BTC, 1 ETH or 10 SOL are skipped (on Binance BTC that drops about 80% of trades but under 5% of volume). Traps older than the trade history show "no trade data" and the break VWAP instead.</li>
-  <li><b>Estimated from candles and OI.</b> +S = (dOI &minus; delta) / 2 and +L = (dOI + delta) / 2 suggest positions opened or closed but cannot say who. "Est. new" sums the proxy over the break, including the reclaim bar. Liquidations of the trapped side are reported separately.</li>
+    All prints are loaded to verify coverage. Each selected venue's buy and sell totals must match its aligned 5m candle within 0.0001% or 1e-8 coins, whichever is larger. Partial, missing, late or mismatched data make the trap's trade readings unavailable. Traps without complete coverage show "no trade data" and the break VWAP instead. Loading every print increases the initial load; live performance has not been revalidated.</li>
+  <li><b>Flow proxies from candles and OI.</b> +S = (dOI &minus; delta) / 2 and +L = (dOI + delta) / 2 cannot identify positions or participants. "Break flow proxy" sums the positive proxy over the break, including the reclaim bar. Liquidations of the trapped side are reported separately.</li>
   <li><b>Stop and invalidation.</b> The flush extreme. A trap also fails if a 5m close goes back through the level.</li>
   <li>One trap per side per hour, since nearby levels often break together.</li>
 </ul>
@@ -264,7 +264,7 @@ html { scroll-behavior: smooth; }
 
 <h3>Readouts</h3>
 <p><b>Corner panel</b> (bottom right of the price pane): the newest trap on each side. For example:</p>
-<div class="readout"><span class="b">Trapped shorts 10-15 02:40 UTC | 4h swing low 80,345 | pressed 2,623 BTC below at avg 80,247 (57% large) | reclaim 4.9x | 347 longs liq | stop 80,188 | est. 104% covered | fully unwound (est.)</span></div>
+<div class="readout"><span class="b">Illustrative format: Trapped shorts [UTC time] | 4h swing low [level] | pressed [size] below at avg [fill] ([share] large) | reclaim [ratio]x | [size] longs liq | stop [price] | counterflow proxy [size] | holding</span></div>
 <ul class="tight">
   <li>Time is the 5m bar where the hold completed, in UTC (the chart shows local time).</li>
   <li>Status:
@@ -272,15 +272,14 @@ html { scroll-behavior: smooth; }
       <li>"holding" while tracked;</li>
       <li>"failed: closed back below (above) the level" or "failed: flush low (high) taken" when the trap fails;</li>
 
-      <li>"fully unwound (est.)" when est. covered reaches 100% of est. new;</li>
       <li>"tracked 24h, ended" after the tracking time.</li>
     </ul>
   </li>
 </ul>
-<p><b>Recent traps window</b> (badge beside the script's name): the last 40 traps, with level, pressed, avg fill, large share, reclaim x, longs or shorts liquidated, stop, est. new, est. covered, measured net flow since the hold, and status. Columns sort.</p>
+<p><b>Recent traps window</b> (badge beside the script's name): the last 40 traps, with level, pressed, avg fill, large share, reclaim x, longs or shorts liquidated, stop, break-flow proxy, counterflow proxy, measured net flow since the hold, and status. Columns sort.</p>
 <p><b>Right edge:</b> +L and +S flow-weighted prices, proxy weights and price distance. These are not position sizes, entries or P&amp;L.</p>
-<h3 id="fuel">Est. covered</h3>
-<p>After the hold, the opposite sign of the same proxy (&minus;S for trapped shorts, &minus;L for trapped longs) accumulates against est. new, shown as a percentage; at 100% the trap ends "fully unwound (est.)". Both sides are estimates from candles and open interest, so read the percentage as a rough guide. The measured net flow (buys minus sells from candles) since the hold sits beside it in the Recent traps window. Price invalidation or the time limit also ends tracking.</p>
+<h3 id="fuel">Counterflow proxy</h3>
+<p>After the hold, the opposite sign of the same proxy (&minus;S for trapped shorts, &minus;L for trapped longs) accumulates in coins. It does not identify who closed a position, and it never ends price tracking, even when it exceeds the break-flow proxy or that proxy is zero. The measured net flow (buys minus sells from candles) since the hold sits beside it in the Recent traps window. Only price invalidation or the time limit ends tracking.</p>
 <h3 id="entries">Flow-weighted price proxies</h3>
 <p>The signed formulas are NL = (dOI + D) / 2 and NS = (dOI - D) / 2. Positive values add weight at HLC3, negative values reduce weight, and weights fade using the half-life in hours. These assumptions do not reconstruct participant holdings.</p>
 <p>All selected venues need aligned candles and OI. Missing break data withholds the break-flow total; missing subsequent data withholds counterflow. Flow-weighted price state resets after a gap. Price traps still run.</p>
