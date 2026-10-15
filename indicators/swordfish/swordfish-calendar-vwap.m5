@@ -1,0 +1,445 @@
+script "Swordfish Calendar VWAP"
+
+// MMT port of the Swordfish Calendar VWAP (kScript v3, then wrun 0.2.0).
+// HLC3 x volume VWAP with +/-1 SD: weekly and monthly from 30m candles, quarterly and yearly from the slow
+// source (4h as the kScript). Method unchanged: West's weighted mean and variance, strict 24/7 continuity, and a
+// period is withheld unless its source reaches the period start and has no gaps.
+// Venues: every chosen venue's candles are pooled into one weighted mean and variance (MMT has no combined
+// candles), and a period counts only when every chosen venue covers it completely.
+
+input (
+  input.section(title: "Periods")
+  focus = input.select("Auto", title: "Panel anchor (UTC)", options: ["Auto", "Weekly", "Monthly", "Quarterly", "Yearly"], description: "The unit whose current period develops with its band. Auto: weekly below 4h charts, monthly below 1D, quarterly below 1W, else yearly.")
+  showW = input.bool(true, title: "Show Weekly (current + previous)")
+  showM = input.bool(true, title: "Show Monthly (current + previous)")
+  showQ = input.bool(true, title: "Show Quarterly (current + previous)")
+  showY = input.bool(true, title: "Show Yearly (current + previous)")
+  input.section(title: "Bands and history")
+  bands = input.bool(true, title: "Show focused VWAP +/-1 standard deviation")
+  previousBands = input.bool(true, title: "Previous VWAP VAH/VAL (+/-1 SD) levels")
+  previous = input.bool(true, title: "Show previous-period VWAP levels")
+  history = input.bool(true, title: "Older periods (listed in the levels window)")
+  olderVA = input.select("Quarterly", title: "Value areas and labels on older periods", options: ["Off", "Quarterly", "Quarterly and yearly", "All"], description: "Older periods (before the previous one) also get their VAH/VAL (+/-1 SD) lines and right-edge labels, e.g. 2026 Q1 VAH.")
+  currentAll = input.bool(false, title: "Current levels for every shown unit", description: "Also draw the current week/month/quarter/year VWAP and +/-1 SD as levels, not only the focused unit's (off = the kScript)")
+  weeks = input.int(4, title: "Completed weeks", min: 1, max: 12)
+  months = input.int(3, title: "Completed months", min: 1, max: 12)
+  quarters = input.int(4, title: "Completed quarters", min: 1, max: 12)
+  years = input.int(2, title: "Completed years", min: 1, max: 5)
+  strict = input.bool(true, title: "Require continuous 24/7 source (disable for session markets)")
+  labels = input.bool(true, title: "Show price labels")
+  bandFill = input.bool(true, title: "Faint fill between VAH and VAL")
+  input.section(title: "Sources")
+  venues = input.exchanges(["binancef", "bybitf"], title: "Venues (pooled)", minSelected: 1, maxSelected: 4, description: "Each venue's candles of the chart's market are pooled. Every venue must cover a period completely for it to count: on MMT, Binance and Bybit futures reach 2022, Hyperliquid 2025-03, OKX 2026-01.")
+  slowTf = input.timeframe(4h, title: "Quarterly/yearly source", description: "4h as the kScript")
+)
+
+type Acc {
+  start: time
+  prior: time
+  w: float
+  mean: float
+  m2: float
+  ok: bool
+  bad: int
+}
+type Done {
+  start: time
+  w: float
+  mean: float
+  m2: float
+  ok: bool
+}
+type Stat {
+  ok: bool
+  w: float
+  mean: float
+  sigma: float
+  missing: int
+}
+type Feed {
+  fast: OhlcvData
+  slow: OhlcvData
+}
+
+data chart = subscribe(data.ohlcv)
+// candles the shown periods need: the completed periods asked for, the current one and one of margin
+setup fastBars = math.max(showW ? (weeks + 2) * 336 : 0, showM ? (months + 2) * 1488 : 0, 1000)
+setup slowBars = math.max(showQ ? (quarters + 2) * 92 : 0, showY ? (years + 2) * 366 : 0, 100) * (86400 / time.tfSeconds(slowTf))
+setup feeds = for ex in venues {
+  Feed { fast: subscribe(data.ohlcv, exchange: ex, timeframe: 30m, history: fastBars), slow: subscribe(data.ohlcv, exchange: ex, timeframe: slowTf, history: int(slowBars) ?? 10000) }
+}
+
+setup (
+  shadeW = color.rgb(134, 191, 224)
+  shadeM = color.rgb(168, 155, 223)
+  shadeQ = color.rgb(225, 184, 118)
+  shadeY = color.rgb(206, 140, 170)
+  shadeFocus = color.rgb(239, 158, 105)
+  levelLines = entities.linePool(max: 400)
+  tags = entities.labelPool(max: 80, anchor: anchor.right)
+  fills = entities.boxPool(max: 16)
+)
+
+state (
+  accs = map<string, Acc>(64)
+  done = map<string, Done>(4096)
+  closes: int = 0
+  drawnAt: int = -1
+  older: int = 0
+  unavailable: int = 0
+)
+
+plot (
+  devLine = plot.line(title: "Developing VWAP", color: color.rgb(239, 158, 105), width: 2.0, showLabel: false)
+  devUp = plot.line(title: "Developing +1 SD", color: color.rgb(239, 158, 105, 115), width: 1.0, showLabel: false, showValue: false)
+  devDn = plot.line(title: "Developing -1 SD", color: color.rgb(239, 158, 105, 115), width: 1.0, showLabel: false, showValue: false)
+)
+fill devFill = fill.between(devUp, devDn, color: color.rgb(239, 158, 105, 14))
+
+window details = window(title: "Calendar VWAP levels") {
+  levels: table.new([
+    table.col(title: "Period", width: 0.8),
+    table.col(title: "Dates (UTC)", width: 1.6),
+    table.col(title: "VWAP", align: align.right),
+    table.col(title: "SD", align: align.right),
+    table.col(title: "VAH (+1 SD)", align: align.right),
+    table.col(title: "VAL (-1 SD)", align: align.right),
+    table.col(title: "Status", width: 1.2),
+  ], title: "Periods", capacity: 80),
+}
+
+// ---------------------------------------------------------------- calendar units: 0 Weekly, 1 Monthly, 2 Quarterly, 3 Yearly
+fn unitTf(u: int) -> timeframe {
+  return match u {
+    0 => 1W
+    1 => 1M
+    2 => 3M
+    _ => 1Y
+  }
+}
+fn block(u: int) -> duration {
+  return u < 2 ? time.nominalDuration(30m) : time.nominalDuration(slowTf)
+}
+fn shown(u: int) -> bool {
+  return match u {
+    0 => showW
+    1 => showM
+    2 => showQ
+    _ => showY
+  }
+}
+fn shade(u: int) -> color {
+  return match u {
+    0 => shadeW
+    1 => shadeM
+    2 => shadeQ
+    _ => shadeY
+  }
+}
+fn unitName(u: int) -> string {
+  return match u {
+    0 => "Weekly"
+    1 => "Monthly"
+    2 => "Quarterly"
+    _ => "Yearly"
+  }
+}
+fn completed(u: int) -> int {
+  let n = match u {
+    0 => weeks
+    1 => months
+    2 => quarters
+    _ => years
+  }
+  return math.max(1, math.min(u == 3 ? 5 : 12, n))
+}
+fn mode() -> int {
+  if focus == "Weekly" { return 0 }
+  if focus == "Monthly" { return 1 }
+  if focus == "Quarterly" { return 2 }
+  if focus == "Yearly" { return 3 }
+  let s = time.tfSeconds(context.timeframe)
+  return s < 14400 ? 0 : s < 86400 ? 1 : s < 604800 ? 2 : 3
+}
+
+// ---------------------------------------------------------------- accumulation, one venue's candle at a time
+fn accKey(ex: string, u: int) -> string {
+  return str.format("{0}|{1}", ex, u)
+}
+fn doneKey(ex: string, u: int, start: time) -> string {
+  return str.format("{0}|{1}|{2}", ex, u, time.unixSeconds(start) ?? 0)
+}
+// A finished period is complete when its source reached the start (checked on entry) and ran to its last block.
+fn finish(ex: string, u: int, a: Acc) {
+  let end = time.shiftBars(a.start, 1, tf: unitTf(u))
+  let ok = a.ok && a.w > 0.0 && (!strict || a.prior == end - block(u))
+  done.set(doneKey(ex, u, a.start), Done { start: a.start, w: a.w, mean: a.mean, m2: a.m2, ok: ok })
+}
+fn ingest(ex: string, u: int, ts: time, h: float, l: float, c: float, v: float) {
+  closes += 1
+  let key = accKey(ex, u)
+  let start = time.floor(ts, unitTf(u))
+  let b = block(u)
+  let prev = accs.get(key)
+  let fresh = prev == null || (prev != null && prev.start != start)
+  if prev != null && prev.start != start {
+    finish(ex, u, prev)
+  }
+  // a new period starts as if its previous block had just closed: the first candle must sit on the period start
+  let base = fresh ? Acc { start: start, prior: start - b, w: 0.0, mean: 0.0, m2: 0.0, ok: true, bad: 0 } : prev ?? Acc { start: start, prior: start - b, w: 0.0, mean: 0.0, m2: 0.0, ok: true, bad: 0 }
+  let broken = ts <= base.prior || (strict && ts != base.prior + b)
+  let price = (h + l + c) / 3.0
+  let valid = price > 0.0 && v >= 0.0 && h >= l
+  let w = v > 0.0 ? base.w + v : base.w
+  let delta = price - base.mean
+  let mean = v > 0.0 ? base.mean + delta * v / w : base.mean
+  let m2 = v > 0.0 ? base.m2 + v * delta * (price - mean) : base.m2
+  accs.set(key, Acc { start: start, prior: ts, w: w, mean: mean, m2: m2, ok: base.ok && !broken && valid, bad: base.bad + (broken ? 1 : 0) })
+}
+
+on feeds.fast.close(ex, f) {
+  let ts = f.fast.time
+  let h = f.fast.high
+  let l = f.fast.low
+  let c = f.fast.close
+  let v = f.fast.volume
+  if ts != null && h != null && l != null && c != null && v != null {
+    ingest(ex, 0, ts, h, l, c, v)
+    ingest(ex, 1, ts, h, l, c, v)
+  }
+}
+on feeds.slow.close(ex, f) {
+  let ts = f.slow.time
+  let h = f.slow.high
+  let l = f.slow.low
+  let c = f.slow.close
+  let v = f.slow.volume
+  if ts != null && h != null && l != null && c != null && v != null {
+    ingest(ex, 2, ts, h, l, c, v)
+    ingest(ex, 3, ts, h, l, c, v)
+  }
+}
+
+// ---------------------------------------------------------------- pooling across venues
+// Pooled weighted variance: M2 = sum(m2_v + w_v * (mean_v - mean)^2), built from sum(w), sum(w * mean) and
+// sum(m2 + w * mean^2).
+fn pooled(w: float, s1: float, q: float, ok: bool, missing: int) -> Stat {
+  let mean = w > 0.0 ? s1 / w : 0.0
+  let sigma = w > 0.0 ? math.sqrt(math.max(0.0, q / w - mean * mean)) ?? 0.0 : 0.0
+  return Stat { ok: ok && missing == 0 && w > 0.0, w: w, mean: mean, sigma: sigma, missing: missing }
+}
+// A completed period: every venue's finished record, or its live accumulator when no candle of the next
+// period has closed yet (the accumulator then must already reach the period's last block).
+fn completedStat(u: int, start: time) -> Stat {
+  let end = time.shiftBars(start, 1, tf: unitTf(u))
+  let b = block(u)
+  let w = 0.0
+  let s1 = 0.0
+  let q = 0.0
+  let ok = true
+  let missing = 0
+  for ex in venues {
+    let d = done.get(doneKey(ex, u, start))
+    let a = accs.get(accKey(ex, u))
+    if d != null {
+      w += d.w
+      s1 += d.w * d.mean
+      q += d.m2 + d.w * d.mean * d.mean
+      ok = ok && d.ok
+    } else if a != null && a.start == start && (!strict || a.prior == end - b) {
+      w += a.w
+      s1 += a.w * a.mean
+      q += a.m2 + a.w * a.mean * a.mean
+      ok = ok && a.ok && a.w > 0.0
+    } else {
+      missing += 1
+    }
+  }
+  return pooled(w, s1, q, ok, missing)
+}
+// The period in progress: each venue's accumulator for it plus its forming candle (not yet closed).
+fn currentStat(u: int, start: time) -> Stat {
+  let b = block(u)
+  let w = 0.0
+  let s1 = 0.0
+  let q = 0.0
+  let ok = true
+  let missing = 0
+  for ex, f in feeds {
+    let a = accs.get(accKey(ex, u))
+    let ft = u < 2 ? f.fast.forming.time : f.slow.forming.time
+    let fh = u < 2 ? f.fast.forming.high : f.slow.forming.high
+    let fl = u < 2 ? f.fast.forming.low : f.slow.forming.low
+    let fc = u < 2 ? f.fast.forming.close : f.slow.forming.close
+    let fv = u < 2 ? f.fast.forming.volume : f.slow.forming.volume
+    let has = a != null && a.start == start
+    let aw = has && a != null ? a.w : 0.0
+    let amean = has && a != null ? a.mean : 0.0
+    let am2 = has && a != null ? a.m2 : 0.0
+    let prior = has && a != null ? a.prior : start - b
+    let aok = has && a != null ? a.ok : true
+    let fw = 0.0
+    let fmean = 0.0
+    let fok = true
+    if ft != null && fh != null && fl != null && fc != null && fv != null && ft >= start && ft > prior {
+      fok = !strict || ft == prior + b
+      fw = fv
+      fmean = (fh + fl + fc) / 3.0
+    }
+    if !has && fw == 0.0 {
+      missing += 1
+    } else {
+      w += aw + fw
+      s1 += aw * amean + fw * fmean
+      q += am2 + aw * amean * amean + fw * fmean * fmean
+      ok = ok && aok && fok
+    }
+  }
+  return pooled(w, s1, q, ok, missing)
+}
+
+// ---------------------------------------------------------------- text
+fn priceText(v: float) -> string {
+  let a = math.abs(v)
+  if a >= 100000.0 { return str.format("{0:.0}", v) }
+  if a >= 10000.0 { return str.format("{0:.1}", v) }
+  if a >= 1000.0 { return str.format("{0:.2}", v) }
+  if a >= 100.0 { return str.format("{0:.3}", v) }
+  if a >= 10.0 { return str.format("{0:.4}", v) }
+  return str.format("{0:.6}", v)
+}
+fn code(u: int, start: time, age: int) -> string {
+  if age == 0 {
+    return match u {
+      0 => "W"
+      1 => "M"
+      2 => "Q"
+      _ => "Y"
+    }
+  }
+  if age == 1 {
+    return match u {
+      0 => "pW"
+      1 => "pM"
+      2 => "pQ"
+      _ => "pY"
+    }
+  }
+  if u == 3 { return str.format("{0} PY", time.year(start)) }
+  if u == 2 { return str.format("{0} Q{1}", time.year(start), (time.month(start) + 2) / 3) }
+  if u == 1 { return time.format(start, "{YYYY} M{MM}") }
+  return time.format(start, "Week {DD}/{MM}/{YYYY}")
+}
+fn dates(from: time, to: time) -> string {
+  return str.format("{0} to {1}", time.format(from, "{DD}/{MM}/{YYYY}"), time.format(to, "{DD}/{MM}/{YYYY}"))
+}
+
+// ---------------------------------------------------------------- drawing
+fn row(key: string, name: string, span: string, s: Stat, status: string, tint: color) {
+  details.levels.row(key,
+    table.cell(name, fg: tint),
+    table.cell(span),
+    table.cell(s.ok ? priceText(s.mean) : "-", align: align.right),
+    table.cell(s.ok ? priceText(s.sigma) : "-", align: align.right),
+    table.cell(s.ok ? priceText(s.mean + s.sigma) : "-", align: align.right),
+    table.cell(s.ok ? priceText(s.mean - s.sigma) : "-", align: align.right),
+    table.cell(status))
+}
+// One period's levels: the VWAP line, its +/-1 SD lines when wanted, labels for the previous and current ones.
+// Whether older periods of a unit get their value area and labels.
+fn olderOn(u: int) -> bool {
+  if olderVA == "All" { return true }
+  if olderVA == "Quarterly and yearly" { return u >= 2 }
+  if olderVA == "Quarterly" { return u == 2 }
+  return false
+}
+fn levels(prefix: string, key: string, u: int, start: time, age: int, from: time, s: Stat, withBands: bool, tint: color) {
+  let alpha = age >= 2 ? math.max(56.0, 168.0 * (math.pow(0.8, float(age - 2)) ?? 1.0)) : 255.0
+  let ink = color.withAlpha(tint, int(alpha) ?? 255)
+  let name = code(u, start, age)
+  let to = from + time.nominalDuration(context.timeframe)
+  levelLines.get(prefix, key, "v").set(from, s.mean, to, s.mean, width: age <= 0 ? 2.0 : 1.0, color: ink, style: linestyle.dotted, extend: extend.right)
+  if labels && (age <= 1 || olderOn(u)) {
+    tags.get(prefix, key, "v").set(8, s.mean, str.format("{0} VWAP {1}", name, priceText(s.mean)), color: tint, size: 11, textAlign: "right", zIndex: 5)
+  }
+  if withBands && s.sigma > 0.0 {
+    let band = color.withAlpha(tint, int(alpha * 0.7) ?? 178)
+    let style = age == 0 ? linestyle.dotted : linestyle.solid
+    levelLines.get(prefix, key, "h").set(from, s.mean + s.sigma, to, s.mean + s.sigma, width: 1.0, color: band, style: style, extend: extend.right)
+    levelLines.get(prefix, key, "l").set(from, s.mean - s.sigma, to, s.mean - s.sigma, width: 1.0, color: band, style: style, extend: extend.right)
+    if labels && (age <= 1 || olderOn(u)) {
+      tags.get(prefix, key, "h").set(8, s.mean + s.sigma, str.format("{0} VAH {1}", name, priceText(s.mean + s.sigma)), color: tint, size: 11, textAlign: "right", zIndex: 5)
+      tags.get(prefix, key, "l").set(8, s.mean - s.sigma, str.format("{0} VAL {1}", name, priceText(s.mean - s.sigma)), color: tint, size: 11, textAlign: "right", zIndex: 5)
+    }
+    if bandFill && age == 1 {
+      fills.get(prefix, key).set(from, s.mean + s.sigma, to, s.mean - s.sigma, color: color.withAlpha(tint, 10), extend: extend.right, zIndex: -1)
+    }
+  }
+}
+// Completed periods: redrawn when a source candle has closed since the last drawing.
+fn drawStatic(now: time) {
+  levelLines.clear("S")
+  tags.clear("S")
+  fills.clear("S")
+  details.levels.clear()
+  older = 0
+  unavailable = 0
+  for u in 0..4 {
+    if shown(u) && previous {
+      let cur = time.floor(now, unitTf(u))
+      let limit = history ? completed(u) : 1
+      for age in 1..(limit + 1) {
+        let start = time.shiftBars(cur, -age, tf: unitTf(u))
+        let end = time.shiftBars(start, 1, tf: unitTf(u))
+        let s = completedStat(u, start)
+        let key = str.format("{0}|{1}", u, age)
+        if s.ok {
+          if age >= 2 { older += 1 }
+          levels("S", key, u, start, age, end, s, previousBands && (age == 1 || olderOn(u)), shade(u))
+        } else if age >= 2 {
+          unavailable += 1
+        }
+        row(str.format("{0}{1}", u, 10 + age), code(u, start, age), dates(start, end - 1s), s, s.ok ? "complete" : s.missing > 0 ? str.format("{0} venue(s) short of history", s.missing) : "gaps or invalid candles: withheld", shade(u))
+      }
+    }
+  }
+}
+// Periods in progress: the focused one always (when its unit is shown), the others with "Current levels".
+fn drawCurrent(now: time, latest: time, m: int) {
+  levelLines.clear("C")
+  tags.clear("C")
+  for u in 0..4 {
+    if shown(u) && (u == m || currentAll) {
+      let start = time.floor(now, unitTf(u))
+      let s = currentStat(u, start)
+      if s.ok {
+        levels("C", str.format("{0}", u), u, start, 0, latest, s, bands, u == m ? shadeFocus : shade(u))
+      }
+      row(str.format("{0}10", u), code(u, start, 0), dates(start, now), s, s.ok ? (u == m ? "developing (focus)" : "developing") : "incomplete: withheld", u == m ? shadeFocus : shade(u))
+    }
+  }
+}
+
+on chart.update {
+  let t = chart.time
+  if t != null {
+    let m = mode()
+    // the developing focused VWAP along the chart, every period anchored at its own start
+    let s = currentStat(m, time.floor(t, unitTf(m)))
+    let live = shown(m) && s.ok
+    devLine.plot(live ? s.mean : null)
+    devUp.plot(live && bands ? s.mean + s.sigma : null)
+    devDn.plot(live && bands ? s.mean - s.sigma : null)
+    let fillInk = live && bands && bandFill ? color.rgb(239, 158, 105, 14) : color.rgb(0, 0, 0, 0)
+    devFill.fill(color: fillInk)
+    if chart.isLast {
+      if closes != drawnAt {
+        drawStatic(t)
+        drawnAt = closes
+      }
+      drawCurrent(t, t, m)
+      let pooledText = venues.len > 1 ? str.format("{0} venues pooled", venues.len) : venues[0] ?? ""
+      script.setTitle(str.format("Swordfish | {0} VWAP | {1} | W/M 30m, Q/Y {2}h | HLC3 x volume | {3} older{4}", unitName(m), pooledText, time.tfSeconds(slowTf) / 3600, older, unavailable > 0 ? str.format(", {0} unavailable", unavailable) : ""))
+    }
+  }
+}

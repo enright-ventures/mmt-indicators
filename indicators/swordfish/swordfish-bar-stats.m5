@@ -1,0 +1,123 @@
+script "Swordfish Bar Stats"
+
+// A table under the chart, one column per bar: Long liqs, Short liqs, Net L, Net S, Volume. Each cell is shaded green
+// or red by sign, stronger as the value grows against the recent bars of that row. The Volume row is split: green from
+// the left for the buy share, red from the right for the sell share, its number the net delta (buy - sell), stronger
+// as the bar's total volume grows.
+// Net longs / net shorts are derived as in the "Positioning: NL / NS" script, with dOI the bar's open-interest change
+// and D = buy volume - sell volume: NL = (dOI + D) / 2, NS = (dOI - D) / 2 (so NL + NS = dOI, NL - NS = D). They are
+// an estimate, not exchange-reported positions. Long liqs are longs forced out (forced selling, red), short liqs shorts
+// forced out (forced buying, green). Every row covers the chosen perp venues (default Binance, Bybit, OKX, Hyperliquid):
+// open interest and liquidations come from MMT's combined streams; buy and sell volume is each venue's candle summed,
+// since MMT gives scripts no combined candles (the sum matches MMT's combined volume delta to within rounding). Values
+// are in coins; the live bar updates on every tick.
+
+input (
+  memoryHours = input.float(24.0, title: "Shading scale: hours remembered", min: 1.0, max: 720.0, description: "A cell is fully shaded when its value reaches the largest of that row over this many hours of bars (48 bars on 30m, 288 on 5m).")
+  upColor = input.color(color.rgb(34, 171, 126), title: "Positive / buying")
+  downColor = input.color(color.rgb(214, 72, 92), title: "Negative / selling")
+  showNames = input.bool(true, title: "Row names at the right edge")
+  venues = input.select("Perps: Binance, Bybit, OKX, Hyperliquid", title: "Data from", options: ["Chart venue", "Binance + Bybit perps", "Perps: Binance, Bybit, OKX, Hyperliquid"])
+)
+
+setup (
+  memory = math.min(2000, math.max(5, int(math.floor(memoryHours * 3600.0 / float(time.tfSeconds(context.timeframe)))) ?? 48))
+  useChart = venues == "Chart venue"
+  useAll = venues == "Perps: Binance, Bybit, OKX, Hyperliquid"
+  source = venues == "Binance + Bybit perps" ? markets.agg("binancef", "bybitf") : useChart ? context.exchange : markets.agg("binancef", "bybitf", "hyperliquid", "okxf")
+)
+
+data (
+  chart = subscribe(data.ohlcv)
+  oi = subscribe(data.oi, exchange: source)
+  liq = subscribe(data.stat, exchange: source)
+  // each venue's candles, summed for buy and sell volume
+  bnC = subscribe(data.ohlcv, exchange: "binancef")
+  bbC = subscribe(data.ohlcv, exchange: "bybitf")
+  okC = subscribe(data.ohlcv, exchange: "okxf")
+  hlC = subscribe(data.ohlcv, exchange: "hyperliquid")
+)
+
+pane statsPane = pane(title: "Bar Stats", height: 0.2)
+plot cells = plot.cells(title: "Bar stats", columns: 1, scale: cellscale.unit, on: statsPane, format: cellformat.compact, decimals: 0)
+// the pane's scale: five rows from 0 to 5 (cells do not set a pane's scale)
+plot (
+  floor = plot.line(title: "rows bottom", color: color.rgb(0, 0, 0, 0), width: 0.0, showLabel: false, showValue: false, on: statsPane)
+  ceiling = plot.line(title: "rows top", color: color.rgb(0, 0, 0, 0), width: 0.0, showLabel: false, showValue: false, on: statsPane)
+)
+
+state (
+  peakNL = rolling<float>(memory)
+  peakNS = rolling<float>(memory)
+  peakTotal = rolling<float>(memory)
+  peakLongLiq = rolling<float>(memory)
+  peakShortLiq = rolling<float>(memory)
+  names = entities.labelPool(max: 5, on: statsPane, anchor: anchor.right)
+)
+
+// One cell: row r (0 = bottom), shaded by sign and size against its row's recent peak.
+fn cell(r: int, v: float, peak: float, positive: bool) {
+  let strength = math.min(1.0, math.abs(v) / math.max(peak, 0.000000001))
+  let tint = positive ? upColor : downColor
+  cells.cell(float(r) + 0.06, float(r) + 0.94, weight: 0.94, color: color.withAlpha(tint, 40 + (int(170.0 * strength) ?? 0)), value: v, textColor: color.rgb(240, 243, 247), align: align.center)
+}
+
+// The volume cell: buy share from the left, sell share from the right, net delta as the number.
+fn volumeCell(bv: float, sv: float, peak: float) {
+  let total = bv + sv
+  let strength = math.min(1.0, total / math.max(peak, 0.000000001))
+  let buyShare = total > 0.0 ? bv / total : 0.5
+  let alpha = 60 + (int(150.0 * strength) ?? 0)
+  cells.cell(0.06, 0.94, weight: math.max(buyShare, 0.0), color: color.withAlpha(upColor, alpha), align: align.left)
+  cells.cell(0.06, 0.94, weight: math.max(1.0 - buyShare, 0.0), color: color.withAlpha(downColor, alpha), align: align.right)
+  cells.cell(0.06, 0.94, weight: 1.0, color: color.rgb(0, 0, 0, 0), value: bv - sv, textColor: color.rgb(240, 243, 247), align: align.center)
+}
+
+on chart.update {
+  floor.plot(0.0)
+  ceiling.plot(5.0)
+  let bv = useChart ? chart.forming.buyVolume : (bnC.forming.buyVolume ?? 0.0) + (bbC.forming.buyVolume ?? 0.0) + (useAll ? (okC.forming.buyVolume ?? 0.0) + (hlC.forming.buyVolume ?? 0.0) : 0.0)
+  let sv = useChart ? chart.forming.sellVolume : (bnC.forming.sellVolume ?? 0.0) + (bbC.forming.sellVolume ?? 0.0) + (useAll ? (okC.forming.sellVolume ?? 0.0) + (hlC.forming.sellVolume ?? 0.0) : 0.0)
+  let o = oi.forming.open
+  let c = oi.forming.close
+  if bv != null && sv != null && o != null && c != null {
+    let d = bv - sv
+    let dOi = c - o
+    let nl = (dOi + d) / 2.0
+    let ns = (dOi - d) / 2.0
+    // peaks from closed bars, so the live bar is shaded against settled values
+    cells.clear()
+    cell(2, nl, math.max(peakNL.max() ?? 0.0, math.abs(nl)), nl >= 0.0)
+    cell(1, ns, math.max(peakNS.max() ?? 0.0, math.abs(ns)), ns >= 0.0)
+    volumeCell(bv, sv, math.max(peakTotal.max() ?? 0.0, bv + sv))
+    // MMT's buyLiq is longs liquidated, sellLiq shorts liquidated (checked against 1m returns)
+    let ll = liq.forming.buyLiq ?? 0.0
+    let sl = liq.forming.sellLiq ?? 0.0
+    cell(4, ll, math.max(peakLongLiq.max() ?? 0.0, ll), false)
+    cell(3, sl, math.max(peakShortLiq.max() ?? 0.0, sl), true)
+  }
+  if showNames && chart.isLast {
+    let ink = color.rgb(170, 178, 190)
+    names.get("4").set(6, 4.5, "Long liqs", color: ink, size: 14, textAlign: "right")
+    names.get("3").set(6, 3.5, "Short liqs", color: ink, size: 14, textAlign: "right")
+    names.get("2").set(6, 2.5, "Net L", color: ink, size: 14, textAlign: "right")
+    names.get("1").set(6, 1.5, "Net S", color: ink, size: 14, textAlign: "right")
+    names.get("0").set(6, 0.5, "Volume", color: ink, size: 14, textAlign: "right")
+  }
+}
+
+on chart.close {
+  let bv = useChart ? chart.buyVolume : (bnC.buyVolume ?? 0.0) + (bbC.buyVolume ?? 0.0) + (useAll ? (okC.buyVolume ?? 0.0) + (hlC.buyVolume ?? 0.0) : 0.0)
+  let sv = useChart ? chart.sellVolume : (bnC.sellVolume ?? 0.0) + (bbC.sellVolume ?? 0.0) + (useAll ? (okC.sellVolume ?? 0.0) + (hlC.sellVolume ?? 0.0) : 0.0)
+  let o = oi.open
+  let c = oi.close
+  if bv != null && sv != null && o != null && c != null {
+    let d = bv - sv
+    let dOi = c - o
+    peakNL.push(math.abs((dOi + d) / 2.0))
+    peakNS.push(math.abs((dOi - d) / 2.0))
+    peakTotal.push(bv + sv)
+  }
+  peakLongLiq.push(liq.buyLiq ?? 0.0)
+  peakShortLiq.push(liq.sellLiq ?? 0.0)
+}

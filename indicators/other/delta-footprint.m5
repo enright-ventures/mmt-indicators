@@ -1,0 +1,200 @@
+script "Delta Footprint"
+
+// Bid x Ask footprint cells drawn over each candle, from MMT's per-bar
+// volume-profile snapshots. One box per price row: left number = sell
+// (bid-hit) volume, right number = buy (ask-lift) volume. Rows are
+// tinted by delta, diagonal imbalances are painted solid, the bar POC
+// gets a border, and a thin hollow candle outline is drawn on top.
+//
+// MMT has no forming volume-profile view, so a candle receives its
+// footprint the moment it closes. The live candle shows the outline only.
+
+data (
+  chart  = subscribe(data.ohlcv)
+  volume = subscribe(data.volume)
+)
+
+input (
+  rowSizeIn    = input.float(25.0, title: "Row size in price (0 = auto)", min: 0.0)
+  ticksPerRow  = input.float(10.0, title: "Auto row size: ticks per row", min: 1.0, max: 10000.0)
+  maxRows      = input.int(40, title: "Max rows per bar", min: 4, max: 200)
+  cellPool     = input.int(2000, title: "Cell pool (bars kept x rows)", min: 100, max: 20000)
+  fpBars       = input.int(100, title: "Bar stat labels kept", min: 5, max: 1000)
+  imbRatio     = input.float(3.0, title: "Diagonal imbalance ratio", min: 1.0, max: 50.0)
+  imbMin       = input.float(0.0, title: "Min side volume for imbalance", min: 0.0)
+  quoteVol     = input.bool(true, title: "Show volume x price (quote units)")
+  showText     = input.bool(true, title: "Show bid x ask text")
+  showStats    = input.bool(false, title: "Show bar delta / volume under bar")
+  drawOutline  = input.bool(true, title: "Draw hollow candle outline")
+  cellTextSize = input.float(7.0, title: "Cell text size", min: 4.0, max: 30.0)
+  tintMin      = input.float(45.0, title: "Tint alpha at zero delta", min: 0.0, max: 255.0)
+  tintMax      = input.float(170.0, title: "Tint alpha at full delta", min: 0.0, max: 255.0)
+  buyColor     = input.color(color.rgb(38, 166, 91), title: "Buy tint")
+  sellColor    = input.color(color.rgb(214, 72, 72), title: "Sell tint")
+  imbBuyColor  = input.color(color.rgb(0, 230, 118), title: "Buy imbalance fill")
+  imbSellColor = input.color(color.rgb(255, 82, 82), title: "Sell imbalance fill")
+  pocColor     = input.color(color.rgb(255, 213, 79), title: "POC border")
+  textColor    = input.color(color.rgb(200, 206, 214), title: "Cell text")
+  upColor      = input.color(color.rgb(38, 166, 91), title: "Candle up")
+  downColor    = input.color(color.rgb(214, 72, 72), title: "Candle down")
+)
+
+state (
+  cells     = entities.boxPool(max: cellPool)
+  stats     = entities.labelPool(max: fpBars)
+  lastDrawn: int = -1
+)
+
+plot candles = plot.candle(title: "Footprint outline", showLabel: false, showValue: false)
+
+// Compact volume text: 13.8M, 845k, 1.2k, 42
+fn fmtVol(v: float) -> string {
+  let a = math.abs(v)
+  if a >= 1000000000.0 { return str.format("{0:.2}B", v / 1000000000.0) }
+  if a >= 1000000.0 { return str.format("{0:.1}M", v / 1000000.0) }
+  if a >= 10000.0 { return str.format("{0}k", int(math.round(v / 1000.0)) ?? 0) }
+  if a >= 1000.0 { return str.format("{0:.1}k", v / 1000.0) }
+  if a >= 100.0 { return str.format("{0}", int(math.round(v)) ?? 0) }
+  if a >= 10.0 { return str.format("{0:.1}", v) }
+  return str.format("{0:.2}", v)
+}
+
+fn fmtSigned(v: float) -> string {
+  return v >= 0.0 ? str.concat("+", fmtVol(v)) : fmtVol(v)
+}
+
+// Smallest multiple of step that is >= value (ceil to a grid).
+fn ceilTo(value: float, step: float) -> float {
+  let q = math.floor(value / step)
+  return q * step < value ? (q + 1.0) * step : q * step
+}
+
+on chart.update {
+  // ---- 1. Hollow candle outline, live bar included -----------------------
+  let o = chart.open
+  let h = chart.high
+  let l = chart.low
+  let c = chart.close
+  if drawOutline && o != null && h != null && l != null && c != null {
+    let col = c >= o ? upColor : downColor
+    candles.plot(o, h, l, c, bodyColor: color.withAlpha(col, 0), wickColor: col, borderColor: col)
+  }
+
+  // ---- 2. Footprint for the newest confirmed volume snapshot --------------
+  // In chart.update the volume sub reads its latest confirmed period, so
+  // this is the previous bar during replay and the just-closed bar live.
+  // Cells are keyed by the snapshot's own time, so alignment is exact.
+  let s = volume.summary()
+  if s != null {
+    let st = s.time
+    let stSec = time.unixSeconds(st) ?? 0
+    if lastDrawn != stSec {
+      lastDrawn = stSec
+      let stEnd = st + time.bars(1)
+
+      // Row size: user value, else ticks-per-row, never finer than the
+      // profile bin, always a multiple of the bin so rows sit on a grid.
+      let tick = context.tickSize
+      let bin = s.binSize > 0.0 ? s.binSize : tick
+      let base = rowSizeIn > 0.0 ? rowSizeIn : ticksPerRow * tick
+      let row1 = ceilTo(math.max(base, bin), bin)
+
+      // Coarsen when a bar would need more rows than allowed.
+      let maxRowsF = math.round(maxRows)
+      let lo1 = math.floor(s.minPrice / row1) * row1
+      let hi1 = (math.floor(s.maxPrice / row1) + 1.0) * row1
+      let n1 = math.round((hi1 - lo1) / row1)
+      let factor = n1 > maxRowsF ? ceilTo(n1 / maxRowsF, 1.0) : 1.0
+      let row = row1 * factor
+      let lo = math.floor(s.minPrice / row) * row
+      let hi = (math.floor(s.maxPrice / row) + 1.0) * row
+      let n = int(math.round((hi - lo) / row)) ?? 0
+
+      if n > 0 {
+        let buckets = volume.buckets(n, from: lo, to: hi)
+        if buckets != null {
+          // Pass 1: collect per-row buy/sell so diagonals can be compared.
+          let buys  = float[](202)
+          let sells = float[](202)
+          let froms = float[](202)
+          let maxTot = 0.0
+          let pocIdx = -1
+          let totBuy = 0.0
+          let totSell = 0.0
+          for b in buckets {
+            let mult = quoteVol ? (b.from + b.to) * 0.5 : 1.0
+            let bv = b.buy * mult
+            let sv = b.sell * mult
+            if buys.len < 202 {
+              buys.push(bv)
+              sells.push(sv)
+              froms.push(b.from)
+            }
+            totBuy = totBuy + bv
+            totSell = totSell + sv
+            if bv + sv > maxTot {
+              maxTot = bv + sv
+              pocIdx = b.index
+            }
+          }
+
+          // Pass 2: draw one box per row.
+          let count = buys.len
+          for i in 0..count {
+            let bv = buys[i] ?? 0.0
+            let sv = sells[i] ?? 0.0
+            let bottom = froms[i] ?? lo
+            let top = bottom + row
+            let tot = bv + sv
+            if tot > 0.0 {
+              // Diagonal imbalance: ask at this row vs bid one row below,
+              // bid at this row vs ask one row above.
+              let belowSell = i > 0 ? (sells[i - 1] ?? 0.0) : 0.0
+              let aboveBuy = i + 1 < count ? (buys[i + 1] ?? 0.0) : 0.0
+              let buyImb = i > 0 && belowSell > 0.0 && bv >= imbMin && bv >= belowSell * imbRatio
+              let sellImb = i + 1 < count && aboveBuy > 0.0 && sv >= imbMin && sv >= aboveBuy * imbRatio
+
+              let ratio = (bv - sv) / tot
+              let strength = math.abs(ratio)
+              let alpha = int(math.round(tintMin + strength * (tintMax - tintMin))) ?? 60
+              let cellColor = buyImb ? color.withAlpha(imbBuyColor, 215) :
+                sellImb ? color.withAlpha(imbSellColor, 215) :
+                ratio >= 0.0 ? color.withAlpha(buyColor, alpha) : color.withAlpha(sellColor, alpha)
+
+              let isPoc = i == pocIdx
+              let txt = showText ? str.format("{0} {1}", fmtVol(sv), fmtVol(bv)) : ""
+
+              cells.get(st, i).set(
+                x1: st,
+                y1: top,
+                x2: stEnd,
+                y2: bottom,
+                color: cellColor,
+                borderWidth: isPoc ? 1.0 : 0.0,
+                borderColor: pocColor,
+                text: txt,
+                textColor: buyImb || sellImb ? color.white : textColor,
+                textSize: cellTextSize,
+                font: font.mono,
+                textWrap: false,
+              )
+            }
+          }
+
+          // Bar summary under the low: delta and total volume.
+          if showStats {
+            let d = totBuy - totSell
+            stats.get(st).set(
+              x: st,
+              y: lo - row * 0.8,
+              text: str.format("Δ {0}  V {1}", fmtSigned(d), fmtVol(totBuy + totSell)),
+              color: d >= 0.0 ? upColor : downColor,
+              size: cellTextSize,
+              font: font.mono,
+            )
+          }
+        }
+      }
+    }
+  }
+}

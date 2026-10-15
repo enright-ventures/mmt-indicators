@@ -1,0 +1,396 @@
+<title>Swordfish Indicator Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a terminal-style reference sheet; sticky index on the left at desktop width, one column on phones. */
+:root {
+  --bg: #0d1117;
+  --panel: #141a23;
+  --line: #243041;
+  --fg: #dfe5ee;
+  --muted: #8d99ab;
+  --accent: #e3b341;
+  --buy: #5c9cff;
+  --sell: #ff5c66;
+  --up: #22ab7e;
+  --down: #d6485c;
+  --white: #f5f7fa;
+  --zone-buy: rgba(92, 156, 255, 0.28);
+  --zone-sell: rgba(255, 92, 102, 0.28);
+  --code-bg: #0a0e14;
+  --display: "Barlow Semi Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f6f7f9; --panel: #ffffff; --line: #d9dee6; --fg: #18202b; --muted: #5b6676; --accent: #9a6b00;
+    --buy: #2f6fd6; --sell: #d63a45; --up: #12805b; --down: #b8344a; --white: #18202b;
+    --zone-buy: rgba(47, 111, 214, 0.18); --zone-sell: rgba(214, 58, 69, 0.18); --code-bg: #eef1f5;
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f6f7f9; --panel: #ffffff; --line: #d9dee6; --fg: #18202b; --muted: #5b6676; --accent: #9a6b00;
+  --buy: #2f6fd6; --sell: #d63a45; --up: #12805b; --down: #b8344a; --white: #18202b;
+  --zone-buy: rgba(47, 111, 214, 0.18); --zone-sell: rgba(214, 58, 69, 0.18); --code-bg: #eef1f5;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.6 var(--body); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-inline: 20px; padding-block: 32px 64px; display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 40px; }
+nav { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 20px); align-self: start; font-size: 13px; }
+nav p { font: 600 11px/1 var(--display); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+nav ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+nav a { color: var(--fg); text-decoration: none; display: block; padding: 4px 8px; border-radius: 4px; }
+nav a:hover, nav a:focus-visible { background: var(--panel); outline: none; color: var(--accent); }
+nav .sub a { padding-left: 20px; color: var(--muted); }
+main { min-width: 0; }
+header { border-bottom: 1px solid var(--line); padding-bottom: 24px; margin-bottom: 8px; }
+.eyebrow { font: 600 12px/1 var(--display); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 0 0 12px; }
+h1 { font: 700 44px/1.05 var(--display); margin: 0 0 14px; letter-spacing: .01em; text-wrap: balance; }
+h2 { font: 700 28px/1.15 var(--display); margin: 56px 0 6px; text-wrap: balance; scroll-margin-top: 20px; }
+h3 { font: 600 19px/1.25 var(--display); margin: 26px 0 6px; letter-spacing: .01em; scroll-margin-top: 20px; }
+p, li { max-width: 72ch; }
+.lede { font-size: 17px; color: var(--fg); margin: 0; }
+.meta { color: var(--muted); font-size: 13px; margin-top: 10px; }
+.tagline { color: var(--muted); margin: 0 0 14px; }
+code, .mono { font-family: var(--mono); font-size: 13px; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+a { color: var(--accent); }
+.rows { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 6px 18px; margin: 14px 0; }
+.rows dt { font: 600 12px/1.5 var(--display); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding-top: 3px; }
+.rows dd { margin: 0; min-width: 0; }
+.stack { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin: 20px 0; }
+.stack div { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 14px; padding: 10px 14px; border-top: 1px solid var(--line); background: var(--panel); }
+.stack div:first-child { border-top: 0; }
+.stack b { font: 600 12px/1.6 var(--display); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.key { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin: 16px 0; }
+.glyph { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.glyph svg { width: 74px; height: 50px; display: block; }
+.glyph strong { display: block; font: 600 15px/1.3 var(--display); letter-spacing: .01em; }
+.glyph span { display: block; font-size: 13px; color: var(--muted); line-height: 1.45; }
+.table-wrap { overflow-x: auto; margin: 14px 0; border: 1px solid var(--line); border-radius: 6px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 10px; border-top: 1px solid var(--line); white-space: nowrap; }
+thead th { border-top: 0; font: 600 11px/1.3 var(--display); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); background: var(--panel); }
+td.n, th.n { text-align: right; font-family: var(--mono); font-size: 12.5px; }
+tr.base td { color: var(--muted); }
+tr.sub td:first-child { padding-left: 24px; color: var(--muted); }
+.neg { color: var(--sell); }
+.pos { color: var(--up); }
+.verdict { border-left: 3px solid var(--accent); background: var(--panel); padding: 12px 16px; border-radius: 0 6px 6px 0; margin: 16px 0; max-width: 78ch; }
+.verdict p { margin: 0; }
+.verdict p + p { margin-top: 8px; }
+.readout { font-family: var(--mono); font-size: 12.5px; background: var(--code-bg); border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; overflow-x: auto; white-space: pre; margin: 10px 0; }
+.readout .r { color: var(--sell); }
+.readout .b { color: var(--buy); }
+.readout .g { color: var(--up); }
+.readout .d { color: var(--down); }
+ul.tight { padding-left: 18px; margin: 8px 0; }
+ul.tight li { margin: 3px 0; }
+.files td:last-child { white-space: normal; }
+footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+@media (max-width: 860px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; padding-inline: 16px; }
+  nav { position: static; margin-bottom: 20px; }
+  nav ol { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  nav .sub { display: none; }
+  h1 { font-size: 34px; }
+  .rows { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .rows dd { margin-bottom: 10px; }
+  .stack div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+html { scroll-behavior: smooth; }
+</style>
+
+<div class="wrap">
+<nav aria-label="Contents">
+  <p>Contents</p>
+  <ol>
+    <li><a href="#layout">The Swordfish chart</a></li>
+    <li><a href="#offside-read">Reading for offside traders</a></li>
+    <li><a href="#composites">Composites</a></li>
+    <li><a href="#calvwap">Calendar VWAP</a></li>
+    <li><a href="#rvwap">Rolling VWAP</a></li>
+    <li><a href="#ladder">Delta Heat ladder</a></li>
+    <li><a href="#offside">Offside</a></li>
+    <li class="sub"><a href="#offside-key">Key</a></li>
+    <li class="sub"><a href="#fuel">Fuel</a></li>
+    <li class="sub"><a href="#entries">Open longs and shorts</a></li>
+    <li class="sub"><a href="#backtest">Backtest</a></li>
+    <li><a href="#barstats">Bar Stats</a></li>
+    <li><a href="#builtins">Open Interest, Delta Volume</a></li>
+    <li><a href="#flimp">FLIMP workspace</a></li>
+    <li><a href="#data">Data and checks</a></li>
+    <li><a href="#files">Scripts and files</a></li>
+  </ol>
+</nav>
+
+<main>
+<header>
+  <p class="eyebrow">MMT workspace · BTC/USD perps · 30m</p>
+  <h1>Swordfish Indicator Guide</h1>
+  <p class="lede">What each indicator on the Swordfish chart draws, how to read it, which settings matter, and how far each one has been checked against outside data.</p>
+  <p class="meta">Written 15 Oct 2026. Covers the six Swordfish scripts, MMT's built-in Open Interest and Delta Volume panes, and the separate FLIMP workspace.</p>
+</header>
+
+<h2 id="layout">The Swordfish chart</h2>
+<p class="tagline">One 30m chart of BTC/USD on Binance perps. A single chart matters: in a two-chart layout, scripts that wait for the live bar stalled.</p>
+<div class="stack">
+  <div><b>Price pane</b><span>Composites (Daily and Weekly), Calendar VWAP (weekly focus with monthly, quarterly and yearly levels), Rolling VWAP (7D, 30D, 365D), the Delta Heat ladder on every candle, and Offside (trap markers, divergences, reaction zones, open longs' and shorts' average entries).</span></div>
+  <div><b>Open Interest</b><span>MMT built-in, four perps combined, as candles.</span></div>
+  <div><b>Delta Volume</b><span>MMT built-in, four perps combined, buy minus sell volume per bar.</span></div>
+  <div><b>Bar Stats</b><span>Swordfish table, one column per bar: Long liqs, Short liqs, Net L, Net S, Volume.</span></div>
+</div>
+
+<h2 id="offside-read">Reading for offside traders</h2>
+<p class="tagline">A suggested order for asking who is caught and how much they still have to unwind.</p>
+<ul class="tight">
+  <li><b>Where is price against the big references?</b> Composite value areas, the calendar VWAPs and their ±1 SD, and the rolling VWAPs show where the market has accepted price. Traders who entered far from these are the ones most likely to be offside.</li>
+  <li><b>Who is underwater?</b> The dotted Open longs and Open shorts lines give the estimated average entry of positions still open. Their right-edge readout shows size and P&amp;L.</li>
+  <li><b>Did a level just trap someone?</b> A blue triangle under a bar marks a failed breakdown that held (shorts trapped); a red one above marks a failed breakout (longs trapped). The corner panel names the level, how many new positions got caught, and their pain point.</li>
+  <li><b>How much is left to unwind?</b> The corner panel shows how much of the newest trap has unwound. A trap that is mostly unwound has little fuel left to push the response further.</li>
+  <li><b>Is it forced?</b> The Long liqs and Short liqs rows in Bar Stats show forced exits, bar by bar.</li>
+</ul>
+
+<h2 id="composites">Swordfish Composites v2</h2>
+<p class="tagline">Value areas of balanced periods, merged when they overlap. On the chart twice: Daily composites and Weekly composites.</p>
+<dl class="rows">
+  <dt>Draws</dt><dd>A box for each composite's value area (70% of its time), a line at its point of control (POC), dates inside the box, and the most recent composites' VAH, POC and VAL extended right with price labels at the edge. The value area shading is strongest on the newest composite.</dd>
+  <dt>Method</dt><dd>Time-at-price profiles from closed 30m bars, one row per 0.05% of price. Consecutive UTC days (or weeks) merge into one composite when their value areas overlap by at least 50%. The rules match the original OpenMarket kScript row for row: pairs, then extensions, then longer aggregates.</dd>
+  <dt>Read it</dt><dd>A composite is a range the market accepted. Inside it, expect rotation; away from it, traders who built positions there are either comfortable or offside. Extended levels act as reference prices.</dd>
+  <dt>Settings</dt><dd><code>Composite period</code> (Daily, Weekly, Monthly), display and calculation windows (default 30 days or 13 weeks), recent composites with rays (4), value-area shading (16%). On this chart: one copy Daily, one Weekly.</dd>
+  <dt>Checked</dt><dd>Identical to the Python reference (<code>composites_ref.py</code>) on BTC: 7 daily and 4 weekly composites.</dd>
+</dl>
+
+<h2 id="calvwap">Swordfish Calendar VWAP</h2>
+<p class="tagline">VWAPs anchored to calendar periods, with ±1 standard deviation as value-area edges.</p>
+<dl class="rows">
+  <dt>Draws</dt><dd>The focused period's developing VWAP with a ±1 SD band (weekly on this chart). The current and previous week, month, quarter and year as levels, each with VAH and VAL (+1 and −1 SD). Older quarters keep their value areas with labels such as <code>2026 Q1 VAH</code>. A levels window (badge beside the name) lists every period.</dd>
+  <dt>Method</dt><dd>HLC3 × volume, Binance and Bybit perps pooled into one weighted mean and variance. Week and month use 30m candles; quarter and year use 4h. A period is withheld unless every pooled exchange's data starts at the period start with no gaps. Both exchanges reach 2022 on MMT; OKX (from Jan 2026) and Hyperliquid (from Mar 2025) are left out so older periods stay complete.</dd>
+  <dt>Read it</dt><dd>The VWAP is the average price paid in the period. Price above a period's VWAP means its average buyer is in profit and its average seller is not. The ±1 SD lines mark the edges of that period's value.</dd>
+  <dt>Settings</dt><dd><code>Panel anchor</code> (Weekly here), which units to show, <code>Value areas and labels on older periods</code> (All here), completed periods kept, venues pooled.</dd>
+  <dt>Checked</dt><dd>Binance only: within 0.01% of Binance's own data, including the 2024 yearly VWAP (3,063.02 on ETH, where OpenMarket's data had been wrong). Pooled: this week's VWAP 82,736.90 vs 82,736.97 from Binance and Bybit's own candles, ±1 SD within 7 cents.</dd>
+</dl>
+
+<h2 id="rvwap">Swordfish Rolling VWAP</h2>
+<p class="tagline">Trailing 7-day, 30-day and 365-day VWAPs: the average price paid over a fixed lookback, moving every bar.</p>
+<dl class="rows">
+  <dt>Draws</dt><dd>7D and 30D as dashed lines, 365D as a thinner solid white line, each named at the right edge.</dd>
+  <dt>Method</dt><dd>HLC3 × volume, Binance and Bybit perps pooled: each exchange keeps its own trailing window and the VWAP is their summed price × volume over summed volume. 7D and 30D roll over 336 and 1,440 bars of 30m candles; 365D rolls over daily candles and steps once a day. The candle still forming is included.</dd>
+  <dt>Read it</dt><dd>The average cost of everyone active over that window. Price below the 30D line means the past month's average buyer is underwater.</dd>
+  <dt>Checked</dt><dd>Pooled, against Binance and Bybit's own candles: 7D 82,583.20 vs 82,583.29; 30D 82,809.70 vs 82,809.65; 365D 77,716 vs 77,711.</dd>
+</dl>
+
+<h2 id="ladder">Swordfish Delta Heat</h2>
+<p class="tagline">A delta ladder on every candle: who was aggressive at each price inside the bar, in dollars.</p>
+<div class="key">
+  <div class="glyph">
+    <svg viewBox="0 0 74 50" aria-hidden="true"><rect x="8" y="6" width="62" height="11" fill="var(--zone-buy)"/><rect x="8" y="6" width="44" height="11" fill="var(--buy)"/><text x="10" y="15" font-family="IBM Plex Mono, monospace" font-size="8" fill="var(--white)">+2.1M</text><rect x="8" y="20" width="62" height="11" fill="var(--zone-sell)"/><rect x="8" y="20" width="18" height="11" fill="var(--sell)"/><text x="10" y="29" font-family="IBM Plex Mono, monospace" font-size="8" fill="var(--white)">-640K</text><rect x="8" y="34" width="62" height="11" fill="var(--zone-sell)"/><rect x="8" y="34" width="62" height="11" fill="var(--sell)" stroke="var(--white)" stroke-width="1.2"/><text x="10" y="43" font-family="IBM Plex Mono, monospace" font-size="8" fill="var(--white)">-4.8M</text><rect x="2" y="6" width="3" height="39" fill="var(--up)"/></svg>
+    <div><strong>Rows</strong><span>Each $50 price row (0.06% of price) is a lane. The bar's length is the row's net delta against the candle's largest row: blue for buying, red for selling. The number is the dollar value. The candle's largest row is outlined.</span></div>
+  </div>
+  <div class="glyph">
+    <svg viewBox="0 0 74 50" aria-hidden="true"><line x1="10" y1="4" x2="10" y2="46" stroke="var(--up)" stroke-width="1"/><rect x="7" y="12" width="6" height="24" fill="var(--up)"/><rect x="20" y="20" width="48" height="10" fill="var(--zone-buy)"/></svg>
+    <div><strong>Candle strip</strong><span>The chart's candle runs as a thin strip at the bar's left edge, so the ladder can use the bar's width.</span></div>
+  </div>
+</div>
+<dl class="rows">
+  <dt>Scale</dt><dd>Length is relative to the candle's own largest row, which runs full length and is outlined. Colour strength compares across candles: full colour at 2× a typical bar's largest row (the average over the last 200 bars), so a quiet candle's biggest row is full length but pale.</dd>
+  <dt>Data</dt><dd>MMT's per-bar volume snapshots, summed over Binance, Bybit, OKX and Hyperliquid perps. These cover about the last 1,000 bars (21 days on 30m). The live bar is rebuilt from completed one-minute snapshots, so it is at most a minute behind.</dd>
+  <dt>Read it</dt><dd>Heavy buying at the top of a bar that closed lower means buyers paid up and got rejected. Offside turns that into a marker.</dd>
+</dl>
+
+<h2 id="offside">Swordfish Offside</h2>
+<p class="tagline">Where traders are caught offside, following Stable workshop 11: a level that matters breaks, price reclaims it, and the reclaim holds. Plus how much of each trap has unwound, and where open longs and shorts got in.</p>
+
+<h3 id="offside-key">Key</h3>
+<div class="key">
+  <div class="glyph">
+    <svg viewBox="0 0 74 50" aria-hidden="true"><line x1="4" y1="22" x2="56" y2="22" stroke="var(--buy)" stroke-width="1"/><line x1="20" y1="10" x2="20" y2="36" stroke="var(--muted)" stroke-width="1.2"/><rect x="17" y="14" width="6" height="10" fill="var(--down)"/><line x1="34" y1="12" x2="34" y2="30" stroke="var(--muted)" stroke-width="1.2"/><rect x="31" y="14" width="6" height="10" fill="var(--up)"/><polygon points="14,47 26,47 20,40" fill="var(--buy)"/></svg>
+    <div><strong>Trapped shorts</strong><span>Blue triangle under the flush low: a failed breakdown. Price broke under the level (thin line), closed back above it within the hour, and held for 15 minutes. Placed on the bar where the hold completed.</span></div>
+  </div>
+  <div class="glyph">
+    <svg viewBox="0 0 74 50" aria-hidden="true"><line x1="4" y1="28" x2="56" y2="28" stroke="var(--sell)" stroke-width="1"/><line x1="20" y1="14" x2="20" y2="40" stroke="var(--muted)" stroke-width="1.2"/><rect x="17" y="26" width="6" height="10" fill="var(--up)"/><polygon points="14,3 26,3 20,10" fill="var(--sell)"/></svg>
+    <div><strong>Trapped longs</strong><span>Red triangle above the flush high: a failed breakout, the mirror image.</span></div>
+  </div>
+  <div class="glyph">
+    <svg viewBox="0 0 74 50" aria-hidden="true"><polygon points="12,32 24,32 18,24" fill="var(--buy)" opacity=".67"/><polygon points="42,36 60,36 51,23" fill="var(--buy)"/><text x="6" y="46" font-family="IBM Plex Mono, monospace" font-size="8" fill="var(--muted)">usual   many</text></svg>
+    <div><strong>Marker size</strong><span>Bigger and solid when more new positions were trapped than the average of the last 20 traps.</span></div>
+  </div>
+  <div class="glyph">
+    <svg viewBox="0 0 74 50" aria-hidden="true"><line x1="4" y1="18" x2="30" y2="18" stroke="var(--buy)" stroke-width="1"/><line x1="30" y1="30" x2="70" y2="30" stroke="var(--buy)" stroke-width="1.5" stroke-dasharray="2 3"/><line x1="30" y1="42" x2="56" y2="42" stroke="var(--buy)" stroke-width="1.5" stroke-dasharray="2 3" opacity=".4"/></svg>
+    <div><strong>Level and pain point</strong><span>Thin solid line: the level that failed, from the break onward, extending while the trap holds. Dotted line: the pain point, the average price traded during the break, where the trapped side got in. Both are bright while the trap is tracked and stop, faded, where it ends. Each carries a short caption: the solid line names the level, "failed breakdown" or "failed breakout", and holding, unwound, failed or ended; the dotted line reads "trapped shorts' entry" (or longs').</span></div>
+  </div>
+  <div class="glyph">
+    <svg viewBox="0 0 74 50" aria-hidden="true"><line x1="8" y1="22" x2="66" y2="10" stroke="var(--sell)" stroke-width="1.5" stroke-dasharray="5 4"/><circle cx="8" cy="22" r="2" fill="var(--sell)"/><circle cx="66" cy="10" r="2" fill="var(--sell)"/><line x1="8" y1="32" x2="66" y2="44" stroke="var(--buy)" stroke-width="1.5" stroke-dasharray="5 4"/></svg>
+    <div><strong>Delta divergence</strong><span>Dashed line joining two highs (red) or lows (blue): price made a new 20-bar extreme but cumulative delta did not.</span></div>
+  </div>
+  <div class="glyph">
+    <svg viewBox="0 0 74 50" aria-hidden="true"><rect x="6" y="8" width="66" height="9" fill="var(--zone-sell)" stroke="var(--sell)" stroke-width="1"/><rect x="6" y="32" width="40" height="9" fill="var(--zone-buy)" opacity=".5"/></svg>
+    <div><strong>Reaction zone</strong><span>A price row with outsized delta (2.5× a typical bar's largest row). Red for selling (resistance), blue for buying (support). Extends right until a bar closes through it, then fades.</span></div>
+  </div>
+  <div class="glyph">
+    <svg viewBox="0 0 74 50" aria-hidden="true"><path d="M4 18 L20 16 L36 19 L52 15 L70 16" fill="none" stroke="var(--down)" stroke-width="1.6" stroke-dasharray="1.5 3"/><path d="M4 36 L20 37 L36 33 L52 35 L70 32" fill="none" stroke="var(--up)" stroke-width="1.6" stroke-dasharray="1.5 3"/></svg>
+    <div><strong>Open longs and shorts</strong><span>Dotted green line: estimated average entry of longs still open. Dotted red line: the same for shorts.</span></div>
+  </div>
+</div>
+
+<h3>How a trap is found</h3>
+<p>Workshop 11's three questions, made measurable. Judged on 5m bars whatever the chart's timeframe:</p>
+<ul class="tight">
+  <li><b>A level that matters.</b> By default, 4h swing highs and lows (the middle of 7 bars, below the 3 before and not above the 3 after), watched for 14 days. Swing lows can only fail as breakdowns, swing highs as breakouts.</li>
+  <li><b>The break.</b> A 5m bar trades through the level by at least 0.03% of price, coming from the other side.</li>
+  <li><b>The reclaim.</b> A 5m close back on the original side within 60 minutes. A break that stays through the level longer than that counts as acceptance, and the level is dropped.</li>
+  <li><b>The hold (the trigger).</b> The next three 5m closes (15 minutes) stay on the reclaimed side and the flush extreme is not taken. If a close slips back through within the hour, the break continues; if the flush extreme is taken, there is no trap.</li>
+  <li><b>Who is trapped.</b> New positions opened during the break: shorts for a failed breakdown, sum of max(NS, 0) with <code>NS = (dOI − D) / 2</code>, over the four perp venues. Plus the other side's liquidations during the break (longs stopped out underneath, who must buy back in).</li>
+  <li><b>Pain point.</b> The VWAP of the break bars: where the trapped side traded.</li>
+  <li><b>Stop and invalidation.</b> The flush extreme. A trap also fails if a 5m close goes back through the level.</li>
+  <li>One trap per side per hour, since nearby levels often break together.</li>
+</ul>
+<p><b>Optional levels</b> (settings, off by default): weekly, monthly, quarterly and yearly VWAP and ±1 SD, the prior period's, older quarters', and the developing period's (taken at each UTC day start). These come from the chart market's 4h candles, so they can sit slightly off the Calendar VWAP's lines, which pool Binance and Bybit and use 30m candles for week and month. Pooling here made the script too slow to load. VWAP levels can trap either way; the side is set by where price breaks from.</p>
+<p><b>Old wick markers</b> (setting, off by default): the earlier method, heavy net delta inside a rejected wick. Kept for comparison; the backtest found no edge in it.</p>
+
+<h3>Readouts</h3>
+<p><b>Corner panel</b> (bottom right of the price pane): the newest trap on each side. For example:</p>
+<div class="readout"><span class="b">Trapped shorts 10-15 02:40 UTC | 4h swing low 81,240 | 420 BTC new shorts + 35 longs stopped | pain 81,050 | stop 80,900 | 30% unwound | holding</span></div>
+<ul class="tight">
+  <li>Time is the 5m bar where the hold completed, in UTC (the chart shows local time).</li>
+  <li>Status:
+    <ul class="tight">
+      <li>"holding" while tracked;</li>
+      <li>"failed: closed back below (above) the level" or "failed: flush low (high) taken" when the trap fails;</li>
+      <li>"fully unwound" when the covering reaches the trapped size;</li>
+      <li>"tracked 24h, ended" after the tracking time.</li>
+    </ul>
+  </li>
+</ul>
+<p><b>Recent traps window</b> (badge beside the script's name): the last 40 traps, with their level, new positions, stopped-out positions, pain point, stop, share unwound and status. Columns sort.</p>
+<p><b>Right edge</b>: the open longs' and shorts' average entries. The figures below are illustrative.</p>
+<div class="readout"><span class="g">Open longs avg entry 81,953 | 3,237 BTC | P&amp;L -0.6%</span>
+<span class="d">Open shorts avg entry 82,233 | 9,956 BTC | P&amp;L +0.9%</span></div>
+<p class="meta">MMT scripts cannot show tooltips, so the corner panel and the Recent traps window replace hover.</p>
+
+<h3 id="fuel">Fuel: how much of a trap has unwound</h3>
+<ul class="tight">
+  <li>Each 5m bar after the trap adds its closing shorts (for trapped shorts) or closing longs, max(−NS, 0) or max(−NL, 0), over the four venues, against the trapped size.</li>
+  <li>Tracking stops when the trap fails, when 100% has unwound, or after 24 hours ("Stop tracking after hours").</li>
+  <li>Every closing trader counts, not only the trapped ones, so read the share as an upper bound.</li>
+</ul>
+
+<h3 id="entries">Open longs and shorts (the dotted entry lines)</h3>
+<p>The "Open longs avg entry" and "Open shorts avg entry" readouts used to say "Longs in" and "Shorts in". They estimate where the longs and shorts still holding positions got in on average.</p>
+<ul class="tight">
+  <li>Each bar's new longs and new shorts come from the same split as Bar Stats: <code>NL = (dOI + D) / 2</code>, <code>NS = (dOI − D) / 2</code>. Here they are aggregated across Binance, Bybit, OKX and Hyperliquid perps: D is the four venues' summed buy minus sell volume and dOI the change in their summed open interest. The four-venue sum matched MMT's aggregate delta on all 200 bars checked.</li>
+  <li>New positions are added at the bar's HLC3. Closing bars take positions off at the current average.</li>
+  <li>There is no fixed lookback window. Every bar since the chart's history starts counts, but older positions fade with a half-life of 96 bars (2 days on 30m): a position opened 2 days ago counts half, 4 days ago a quarter. The setting is "Half-life in bars".</li>
+  <li>Size is in BTC. P&amp;L is price against the average entry, from that side's view.</li>
+</ul>
+<p>It is an estimate from aggregate flows, not exchange-reported positions.</p>
+
+<h3 id="backtest">Backtest</h3>
+<p>Workshop-11 traps on Binance BTCUSDT perps, 5m, January 2025 to 13 October 2026 (187,488 bars), with Binance 5m open interest. Each row shows the two halves of the period (split 1 December 2025), so you can see whether a result holds in both.</p>
+<ul class="tight">
+  <li><b>Entry:</b> the close where the hold completes.</li>
+  <li><b>Stop:</b> beyond the flush extreme.</li>
+  <li><b>1R expectancy:</b> the average result in units of that risk, with a 1:1 target and first touch within 8 hours.</li>
+  <li><b>Gaps:</b> no fees, and no liquidations (Binance publishes no history of them).</li>
+</ul>
+<div class="table-wrap"><table>
+  <thead><tr><th>Levels</th><th>Side</th><th class="n">n</th><th class="n">1R exp, first half</th><th class="n">1R exp, second half</th></tr></thead>
+  <tbody>
+    <tr><td><b>4h swing points</b> (default)</td><td>failed breakdown, long</td><td class="n">281</td><td class="n">+0.04</td><td class="n pos">+0.15</td></tr>
+    <tr><td></td><td>failed breakout, short</td><td class="n">250</td><td class="n pos">+0.16</td><td class="n pos">+0.17</td></tr>
+    <tr><td>30m swing points</td><td>both</td><td class="n">~780</td><td class="n" colspan="2">about 0 (one-year test)</td></tr>
+    <tr><td>Daily composite VAH/VAL</td><td>failed breakdown, long</td><td class="n">462</td><td class="n">−0.04</td><td class="n">−0.01</td></tr>
+    <tr><td>Weekly composite VAH/VAL</td><td>both</td><td class="n">113</td><td class="n" colspan="2">mixed</td></tr>
+    <tr><td>Developing W/M/Q/Y VWAP and bands</td><td>both</td><td class="n">30–230 each</td><td class="n" colspan="2">mostly negative first half, positive second: no consistent edge</td></tr>
+    <tr><td>Prior month/quarter/year VWAP and bands, older quarters</td><td>both</td><td class="n">0–12 each</td><td class="n" colspan="2">too rare to test</td></tr>
+    <tr class="base"><td>No signal, every hour (baseline)</td><td>either</td><td class="n">thousands</td><td class="n" colspan="2">about 0</td></tr>
+  </tbody>
+</table></div>
+<div class="verdict">
+  <p><b>Verdict:</b> only traps at 4h swing points leaned positive in both halves, about +0.15R. That is modest, no t-statistic reached 2, and it is close to taker fees for a round trip. Use traps as context for who is caught and where their pain sits, not as a mechanical entry.</p>
+  <p>The earlier wick method showed no edge at all over a year: 796 markers, no better than any bar with a 35% wick.</p>
+</div>
+<p><b>Cross-check:</b> the script run inside MMT (Binance only) and a Python replica of its rules (on Binance's published 5m data) found the same traps at the same 5m bar and side: 9 of 9 on STX and 8 of 8 on BTC from 20 September to 13 October.</p>
+<p><b>Fuel test</b> (on the wick-method traps): after 4 bars, traps with the least unwound went on +7.7 bp over the next 12 bars, and mostly unwound ones gave back 5 bp. That's suggestive, not significant.</p>
+
+<h2 id="barstats">Swordfish Bar Stats</h2>
+<p class="tagline">A table under the chart, one column per bar, shaded by sign and by size against that row's last 48 bars.</p>
+<div class="key">
+  <div class="glyph">
+    <svg viewBox="0 0 74 50" aria-hidden="true"><rect x="4" y="4" width="66" height="10" fill="var(--sell)" opacity=".75"/><rect x="4" y="18" width="66" height="10" fill="var(--up)" opacity=".35"/><rect x="4" y="34" width="42" height="12" fill="var(--up)" opacity=".8"/><rect x="46" y="34" width="24" height="12" fill="var(--down)" opacity=".8"/><text x="27" y="43" font-family="IBM Plex Mono, monospace" font-size="8" fill="#fff">+310</text></svg>
+    <div><strong>Volume row</strong><span>Green from the left is the buy share, red from the right the sell share. The number is the net delta (buy − sell). Stronger colour means more total volume.</span></div>
+  </div>
+</div>
+<div class="table-wrap"><table>
+  <thead><tr><th>Row</th><th>Meaning</th><th>Source</th></tr></thead>
+  <tbody>
+    <tr><td>Long liqs</td><td>Longs forcibly closed on the bar (forced selling, red)</td><td>Binance, Bybit, OKX, Hyperliquid perps</td></tr>
+    <tr><td>Short liqs</td><td>Shorts forcibly closed (forced buying, green)</td><td>Same four venues</td></tr>
+    <tr><td>Net L</td><td>New longs minus closed longs: (dOI + D) / 2</td><td>Same four venues</td></tr>
+    <tr><td>Net S</td><td>New shorts minus closed shorts: (dOI − D) / 2</td><td>Same four venues</td></tr>
+    <tr><td>Volume</td><td>Buy and sell split, net delta as the number</td><td>Same four venues</td></tr>
+  </tbody>
+</table></div>
+<p>Open interest and liquidations come from MMT's combined streams. MMT gives scripts no combined candles, so buy and sell volume is the four venues' candles summed. That sum matches MMT's combined volume delta to within 0.03 BTC per bar. The "Data from" setting switches to Binance + Bybit or the chart's venue.</p>
+<p>Values are in BTC. Net L + Net S equals the change in open interest, and Net L − Net S equals the delta. MMT names long liquidations <code>buyLiq</code>. That was checked on 3,000 one-minute bars: minutes with buyLiq averaged −15 bp and minutes with sellLiq +15 bp.</p>
+
+<h2 id="builtins">Open Interest and Delta Volume</h2>
+<p>MMT's built-in panes, added as chart layers.</p>
+<ul class="tight">
+  <li><b>Open Interest:</b> Binance, Bybit, OKX and Hyperliquid perps combined (MMT's "Aggregate" setting, 4 markets). It shows open interest as candles, so you can see whether positions are being added (rising) or closed (falling) during a move.</li>
+  <li><b>Delta Volume:</b> the same four perps combined. It shows each bar's buy minus sell volume.</li>
+</ul>
+<p>They are MMT's own panes; their data source is set in each pane's settings (gear beside the name) under Aggregate → Markets.</p>
+
+<h2 id="flimp">FLIMP workspace</h2>
+<p class="tagline">FLIMP BTC Aquarium v5 (FLIMP's script) has its own MMT workspace, "FLIMP": one 5m BTC/USD chart.</p>
+<ul class="tight">
+  <li><b>Tanks:</b> live prints appear as bubbles sized by BTC, perps on the left and spot on the right. Each tank has a "waterfall" of resting liquidity: outline = the wall nearest price, solid = what hit it. A verdict line reads absorption versus pushing through.</li>
+  <li><b>Changes from the original:</b> four venues (Binance and Bybit perps, Binance and Coinbase spot), live-only feeds, and order books every 30 seconds instead of 5. MMT keeps every full-depth book snapshot, and at 5 seconds that froze the tank within hours.</li>
+  <li><b>Start-up:</b> it takes a few minutes after a page load before bubbles move.</li>
+  <li><b>Sizing:</b> set the Tank width and height inputs to the pane's pixel size.</li>
+</ul>
+
+<h2 id="data">Data and checks</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Indicator</th><th>Data</th><th>Checked against</th><th>Result</th></tr></thead>
+  <tbody>
+    <tr><td>Composites v2</td><td>Binance perps 30m candles</td><td>Python reference of the kScript method</td><td>Identical (7 daily, 4 weekly)</td></tr>
+    <tr><td>Calendar VWAP</td><td>Binance + Bybit perps 30m and 4h</td><td>Binance and Bybit REST candles</td><td>Within 0.01%</td></tr>
+    <tr><td>Rolling VWAP</td><td>Binance + Bybit perps 30m and 1D</td><td>Binance and Bybit REST candles</td><td>Within 0.01% (7D and 30D within 10 cents)</td></tr>
+    <tr><td>Delta Heat</td><td>MMT volume snapshots, 4 perps</td><td>MMT's own per-row volumes</td><td>Rows are MMT's figures; live bar from 1m snapshots</td></tr>
+    <tr><td>Offside traps</td><td>5m candles and OI, 4 perps; 4h swing levels</td><td>Python replica on Binance 5m data (Binance-only run)</td><td>Same traps: 9/9 STX, 8/8 BTC</td></tr>
+    <tr><td>Bar Stats liquidations</td><td>MMT stats, 4 perps</td><td>Side check on 1m returns</td><td>buyLiq = long liquidations</td></tr>
+  </tbody>
+</table></div>
+<p>MMT keeps per-row volume for about the last 1,000 bars. Older ladder rows and markers do not exist on MMT, so the longer backtest used Binance's published trades.</p>
+
+<h2 id="files">Scripts and files</h2>
+<div class="table-wrap"><table class="files">
+  <thead><tr><th>MMT script</th><th>Source file</th></tr></thead>
+  <tbody>
+    <tr><td>Swordfish Composites v2</td><td class="mono">indicators/swordfish/swordfish-composites.m5</td></tr>
+    <tr><td>Swordfish Calendar VWAP</td><td class="mono">indicators/swordfish/swordfish-calendar-vwap.m5</td></tr>
+    <tr><td>Swordfish Rolling VWAP</td><td class="mono">indicators/swordfish/swordfish-rolling-vwap.m5</td></tr>
+    <tr><td>Swordfish Delta Heat</td><td class="mono">indicators/swordfish/swordfish-delta-heat.m5</td></tr>
+    <tr><td>Swordfish Offside</td><td class="mono">indicators/swordfish/swordfish-offside.m5</td></tr>
+    <tr><td>Swordfish Bar Stats</td><td class="mono">indicators/swordfish/swordfish-bar-stats.m5</td></tr>
+    <tr><td>FLIMP BTC Aquarium v5</td><td class="mono">indicators/third-party/flimp-btc-aquarium-v5.m5</td></tr>
+    <tr><td>Backtests</td><td class="mono">validation/offside_traps.py, offside_traps_levels.py, offside_traps_htf.py, offside_traps_holdout.py, offside_traps_mmt_replica.py (wick method: offside_rows.py, offside_backtest.py, offside_fuel.py)</td></tr>
+    <tr><td>TradingView watchlist import</td><td class="mono">tools/tv_watchlist_import.py</td></tr>
+  </tbody>
+</table></div>
+<h3>Importing a TradingView watchlist</h3>
+<p>Export the list in TradingView ("Export list"), then run the importer. With no file given it opens a file picker in Downloads. It converts each symbol to the MMT market (<code>BINANCE:TIAUSDT.P</code> → Binance perps <code>tia/usd</code>, <code>COINBASE:BTCUSD</code> → Coinbase <code>btc/usd</code>), clears the watchlist in your open MMT session and adds the new markets in file order. MMT watchlists have no sections, so <code>###</code> headers only appear in the importer's report. Add <code>--dry-run</code> to see the conversion without changing anything.</p>
+<div class="readout">python3 tools/tv_watchlist_import.py
+python3 tools/tv_watchlist_import.py "~/Downloads/vyaps - TradingView Watchlist.txt" --dry-run</div>
+
+<footer>Swordfish workspace on MMT · BTC/USD binancef 30m · guide current as of 15 Oct 2026</footer>
+</main>
+</div>

@@ -1,0 +1,179 @@
+script "Swordfish Rolling VWAP"
+
+// Rolling 7-day, 30-day and 365-day VWAPs: HLC3 x volume over the trailing window, every bar. 7D and 30D roll on 30m
+// candles (336 and 1,440 of them), so they move with each bar; 365D rolls on daily candles, so it steps once a day.
+// Each includes the candle still forming, so the live bar's value is current.
+// Venues: Binance and Bybit perps pooled by default. Each venue keeps its own trailing window and the VWAP is their
+// summed price x volume over their summed volume (MMT gives scripts no combined candles). Both reach 2022 on MMT, so
+// the 365D window is full on both.
+
+input (
+  show7 = input.bool(true, title: "7D")
+  show30 = input.bool(true, title: "30D", sameLine: true)
+  show365 = input.bool(true, title: "365D", sameLine: true)
+  venue = input.select("Binance + Bybit perps", title: "Volume from", options: ["Binance + Bybit perps", "Binance perps", "Bybit perps"], description: "The candles that weight the VWAPs; two venues are pooled.")
+  color7 = input.color(color.rgb(226, 230, 238), title: "7D colour")
+  color30 = input.color(color.rgb(196, 202, 216), title: "30D colour", sameLine: true)
+  color365 = input.color(color.rgb(255, 255, 255), title: "365D colour", sameLine: true)
+  labels = input.bool(true, title: "Names at the right edge")
+)
+
+setup (
+  useBn = venue != "Bybit perps"
+  useBb = venue != "Binance perps"
+)
+
+data (
+  chart = subscribe(data.ohlcv)
+  bnM = subscribe(data.ohlcv, exchange: "binancef", timeframe: 30m, history: 4000)
+  bnD = subscribe(data.ohlcv, exchange: "binancef", timeframe: 1D, history: 800)
+  bbM = subscribe(data.ohlcv, exchange: "bybitf", timeframe: 30m, history: 4000)
+  bbD = subscribe(data.ohlcv, exchange: "bybitf", timeframe: 1D, history: 800)
+)
+
+plot (
+  line7 = plot.line(title: "7D VWAP", color: color7, width: 2.0, style: linestyle.dashed, showLabel: false)
+  line30 = plot.line(title: "30D VWAP", color: color30, width: 2.0, style: linestyle.dashed, showLabel: false)
+  line365 = plot.line(title: "365D VWAP", color: color365, width: 1.5, showLabel: false)
+)
+
+state (
+  // per venue (a = Binance, b = Bybit): trailing windows of price x volume and volume, with running sums
+  aPv7 = rolling<float>(336)
+  aV7 = rolling<float>(336)
+  aPv30 = rolling<float>(1440)
+  aV30 = rolling<float>(1440)
+  aPv365 = rolling<float>(365)
+  aV365 = rolling<float>(365)
+  aSpv7: float = 0.0
+  aSv7: float = 0.0
+  aSpv30: float = 0.0
+  aSv30: float = 0.0
+  aSpv365: float = 0.0
+  aSv365: float = 0.0
+  bPv7 = rolling<float>(336)
+  bV7 = rolling<float>(336)
+  bPv30 = rolling<float>(1440)
+  bV30 = rolling<float>(1440)
+  bPv365 = rolling<float>(365)
+  bV365 = rolling<float>(365)
+  bSpv7: float = 0.0
+  bSv7: float = 0.0
+  bSpv30: float = 0.0
+  bSv30: float = 0.0
+  bSpv365: float = 0.0
+  bSv365: float = 0.0
+  tags = entities.labelPool(max: 3, anchor: anchor.right)
+)
+
+// HLC3 x volume, or null for an incomplete candle.
+fn pvOf(h: float?, l: float?, c: float?, v: float?) -> float? {
+  if h == null || l == null || c == null || v == null { return null }
+  return (h + l + c) / 3.0 * v
+}
+
+on bnM.close {
+  let pv = pvOf(bnM.high, bnM.low, bnM.close, bnM.volume)
+  let v = bnM.volume
+  if pv != null && v != null {
+    if aPv7.isFull {
+      aSpv7 -= aPv7[0] ?? 0.0
+      aSv7 -= aV7[0] ?? 0.0
+    }
+    if aPv30.isFull {
+      aSpv30 -= aPv30[0] ?? 0.0
+      aSv30 -= aV30[0] ?? 0.0
+    }
+    aPv7.push(pv)
+    aV7.push(v)
+    aPv30.push(pv)
+    aV30.push(v)
+    aSpv7 += pv
+    aSv7 += v
+    aSpv30 += pv
+    aSv30 += v
+  }
+}
+
+on bbM.close {
+  let pv = pvOf(bbM.high, bbM.low, bbM.close, bbM.volume)
+  let v = bbM.volume
+  if pv != null && v != null {
+    if bPv7.isFull {
+      bSpv7 -= bPv7[0] ?? 0.0
+      bSv7 -= bV7[0] ?? 0.0
+    }
+    if bPv30.isFull {
+      bSpv30 -= bPv30[0] ?? 0.0
+      bSv30 -= bV30[0] ?? 0.0
+    }
+    bPv7.push(pv)
+    bV7.push(v)
+    bPv30.push(pv)
+    bV30.push(v)
+    bSpv7 += pv
+    bSv7 += v
+    bSpv30 += pv
+    bSv30 += v
+  }
+}
+
+on bnD.close {
+  let pv = pvOf(bnD.high, bnD.low, bnD.close, bnD.volume)
+  let v = bnD.volume
+  if pv != null && v != null {
+    if aPv365.isFull {
+      aSpv365 -= aPv365[0] ?? 0.0
+      aSv365 -= aV365[0] ?? 0.0
+    }
+    aPv365.push(pv)
+    aV365.push(v)
+    aSpv365 += pv
+    aSv365 += v
+  }
+}
+
+on bbD.close {
+  let pv = pvOf(bbD.high, bbD.low, bbD.close, bbD.volume)
+  let v = bbD.volume
+  if pv != null && v != null {
+    if bPv365.isFull {
+      bSpv365 -= bPv365[0] ?? 0.0
+      bSv365 -= bV365[0] ?? 0.0
+    }
+    bPv365.push(pv)
+    bV365.push(v)
+    bSpv365 += pv
+    bSv365 += v
+  }
+}
+
+// The pooled VWAP of the chosen venues, each with its forming candle added; null until every used window is full.
+fn pooled(fullA: bool, spvA: float, svA: float, fpvA: float?, fvA: float?, fullB: bool, spvB: float, svB: float, fpvB: float?, fvB: float?) -> float? {
+  if (useBn && !fullA) || (useBb && !fullB) { return null }
+  let pv = (useBn ? spvA + (fpvA ?? 0.0) : 0.0) + (useBb ? spvB + (fpvB ?? 0.0) : 0.0)
+  let v = (useBn ? svA + (fvA ?? 0.0) : 0.0) + (useBb ? svB + (fvB ?? 0.0) : 0.0)
+  return v > 0.0 ? pv / v : null
+}
+
+on chart.update {
+  let fa = bnM.forming
+  let fb = bbM.forming
+  let ga = bnD.forming
+  let gb = bbD.forming
+  let fpvA = pvOf(fa.high, fa.low, fa.close, fa.volume)
+  let fpvB = pvOf(fb.high, fb.low, fb.close, fb.volume)
+  let gpvA = pvOf(ga.high, ga.low, ga.close, ga.volume)
+  let gpvB = pvOf(gb.high, gb.low, gb.close, gb.volume)
+  let a7 = show7 ? pooled(aPv7.isFull, aSpv7, aSv7, fpvA, fa.volume, bPv7.isFull, bSpv7, bSv7, fpvB, fb.volume) : null
+  let a30 = show30 ? pooled(aPv30.isFull, aSpv30, aSv30, fpvA, fa.volume, bPv30.isFull, bSpv30, bSv30, fpvB, fb.volume) : null
+  let a365 = show365 ? pooled(aPv365.isFull, aSpv365, aSv365, gpvA, ga.volume, bPv365.isFull, bSpv365, bSv365, gpvB, gb.volume) : null
+  line7.plot(a7)
+  line30.plot(a30)
+  line365.plot(a365)
+  if labels && chart.isLast {
+    if a7 != null { tags.get("7").set(8, a7, "7D", color: color7, size: 14, textAlign: "right") }
+    if a30 != null { tags.get("30").set(8, a30, "30D", color: color30, size: 14, textAlign: "right") }
+    if a365 != null { tags.get("365").set(8, a365, "365D", color: color365, size: 14, textAlign: "right") }
+  }
+}

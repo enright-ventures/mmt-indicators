@@ -1,0 +1,179 @@
+script "Swordfish Delta Heat"
+
+// A delta ladder on every bar. Each price row is a lane: a faint track the width of the bar, and on it a bar whose
+// LENGTH is the row's delta in dollars (aggressive buys minus sells, times the row's price) against the candle's own
+// largest row, which runs full length and is outlined. COLOUR strength compares across candles: it grows with the row's
+// size against a typical bar's largest row, so a quiet candle's biggest row is full length but pale. Blue for net
+// buying, red for net selling. The number sits across the whole lane so it stays legible however short the bar is. The
+// chart's candle runs as a thin strip at the bar's left edge. Dollars, so the scale reads the same on any coin.
+// Closed bars come from MMT's per-bar volume snapshots (the last 250 bars). MMT has no forming bar snapshot, so the
+// live bar is built from the completed one-minute snapshots since it opened (exact per row, at most a minute behind,
+// from any load time) and redrawn as each minute closes; when the bar closes, its own snapshot replaces that. (No live
+// trade tapes: they counted against MMT's live-feed limit, which FLIMP's eight tapes need on the same chart.)
+
+input (
+  input.section(title: "Rows")
+  rowSize = input.float(0.0, title: "Row size in price (0 = auto)", min: 0.0, description: "Auto: 0.06% of price on 30m, scaled by the square root of the timeframe (a bar's typical range grows that way), on a 1/2/2.5/5 grid: BTC near 82k gives $25 on 5m, $50 on 30m, $100 on 1h, $200 on 4h. Bigger rows leave more room for the numbers.")
+  venue = input.select("Perps: Binance, Bybit, OKX, Hyperliquid", title: "Volume from", options: ["Chart venue", "Binance + Bybit perps", "Perps: Binance, Bybit, OKX, Hyperliquid"])
+  input.section(title: "Look")
+  showNumbers = input.bool(true, title: "Delta numbers")
+  memory = input.int(200, title: "Colour scale: bars remembered", min: 20, max: 2000, description: "The typical largest row = the average, over this many bars, of each bar's largest row delta.")
+  colorAt = input.float(2.0, title: "Full colour at x the typical largest row", min: 0.5, max: 10.0, description: "Bar length is relative to the candle's own largest row; colour strength compares rows across candles.")
+  buyColor = input.color(color.rgb(92, 156, 255), title: "Buying")
+  sellColor = input.color(color.rgb(255, 92, 102), title: "Selling")
+)
+
+setup (
+  // row size grows with the square root of the timeframe, as a bar's typical range does
+  tfScale = math.sqrt(float(time.tfSeconds(context.timeframe)) / 1800.0) ?? 1.0
+  source = venue == "Binance + Bybit perps" ? markets.agg("binancef", "bybitf") : venue == "Chart venue" ? context.exchange : markets.agg("binancef", "bybitf", "hyperliquid", "okxf")
+)
+
+data (
+  chart = subscribe(data.ohlcv)
+  vol = subscribe(data.volume, exchange: source)
+  minutes = subscribe(data.volume, exchange: source, timeframe: 1m)
+  // a one-minute clock, live only: reads from the chart's own handler are pinned to the bar's open, so the
+  // forming bar is rebuilt from here as each minute closes
+  clock = subscribe(data.ohlcv, timeframe: 1m, history: 0s)
+)
+
+plot ladder = plot.cells(title: "Delta ladder", columns: 1, scale: cellscale.unit, candles: cellcandles.side, format: cellformat.compact, decimals: 0, sign: true)
+
+state (
+  peaks = rolling<float>(memory)
+  step: float = 0.0
+  lastDrawn: time? = null
+)
+
+// 1, 2, 2.5 or 5 times a power of ten, nearest above the target.
+fn niceStep(target: float) -> float {
+  let magnitude = math.pow(10.0, math.floor(math.log10(target) ?? 0.0)) ?? 1.0
+  let n = target / magnitude
+  return magnitude * (n <= 1.0 ? 1.0 : n <= 2.0 ? 2.0 : n <= 2.5 ? 2.5 : n <= 5.0 ? 5.0 : 10.0)
+}
+
+// A light version of a colour for text: halfway to white.
+fn light(c: color) -> color {
+  return color.gradient(0.5, 0.0, 1.0, c, color.rgb(255, 255, 255))
+}
+
+// One row of the ladder: the lane, the bar on it, then the number across the lane.
+fn row(lo: float, hi: float, usd: float, ref: float, biggest: float, strongest: bool, at: time?) {
+  let side = usd >= 0.0 ? buyColor : sellColor
+  let share = math.min(1.0, math.abs(usd) / math.max(biggest, 0.000000001))
+  let strength = math.min(1.0, math.abs(usd) / (ref * colorAt))
+  ladder.cell(lo, hi, weight: 1.0, color: color.withAlpha(side, 16), align: align.left, time: at)
+  ladder.cell(lo, hi, weight: math.max(share, 0.03), color: color.withAlpha(side, 70 + (int(185.0 * strength) ?? 0)), borderColor: strongest ? light(side) : null, align: align.left, time: at)
+  if showNumbers {
+    ladder.cell(lo, hi, weight: 1.0, color: color.rgb(0, 0, 0, 0), value: usd, textColor: color.rgb(250, 251, 253), align: align.left, time: at)
+  }
+}
+
+// The live bar: the completed minutes since it opened, redrawn as each minute closes.
+on clock.close {
+  let mt = clock.time
+  if mt != null && step > 0.0 {
+    let barStart = time.floor(mt, context.timeframe)
+    let barU = float(time.unixSeconds(barStart) ?? 0)
+    let ref = math.max(peaks.avg() ?? 0.0, 0.000000001)
+    // sum the bar's minutes into rows keyed by row index
+    let lowRow = 1000000000000.0
+    let highRow = -1000000000000.0
+    let span = math.min(240, math.max(1, int(math.floor(float(time.tfSeconds(context.timeframe)) / 60.0)) ?? 1))
+    let more = true
+    let sums = map<int, float>(2048)
+    let vols = map<int, float>(2048)
+    for back in 0..span {
+      if more {
+        let b = minutes.bucketsByStep(step, barsAgo: back)
+        if b == null || (b != null && float(time.unixSeconds(b.time) ?? 0) < barU) {
+          more = false
+        } else if b != null {
+          for i in 0..b.len {
+            let c = b.get(i)
+            if c != null && c.total > 0.0 {
+              let r = math.floor((c.from + c.to) / 2.0 / step)
+              let k = int(r) ?? 0
+              sums.set(k, (sums.get(k) ?? 0.0) + c.delta)
+              vols.set(k, (vols.get(k) ?? 0.0) + c.total)
+              lowRow = math.min(lowRow, r)
+              highRow = math.max(highRow, r)
+            }
+          }
+        }
+      }
+    }
+    if highRow >= lowRow {
+      let rows = int(highRow - lowRow) ?? 0
+      let biggest = 0.0
+      let strongest = -1
+      let net = 0.0
+      for j in 0..(rows + 1) {
+        let r = lowRow + float(j)
+        let usd = (sums.get(int(r) ?? 0) ?? 0.0) * (r + 0.5) * step
+        net += usd
+        if math.abs(usd) > biggest {
+          biggest = math.abs(usd)
+          strongest = j
+        }
+      }
+      ladder.clear(time: barStart)
+      for j in 0..(rows + 1) {
+        let r = lowRow + float(j)
+        let k = int(r) ?? 0
+        if (vols.get(k) ?? 0.0) > 0.0 {
+          row(r * step, (r + 1.0) * step, (sums.get(k) ?? 0.0) * (r + 0.5) * step, ref, biggest, j == strongest, barStart)
+        }
+      }
+    }
+  }
+}
+
+// Closed bars: the volume snapshot, once per bar.
+on chart.close {
+  let price = chart.close
+  if step <= 0.0 && price != null {
+    step = rowSize > 0.0 ? rowSize : niceStep(price * 0.0006 * tfScale)
+  }
+  if step > 0.0 {
+    let b = vol.bucketsByStep(step)
+    if b != null {
+      let at = b.time
+      let prior = lastDrawn
+      if prior == null || (prior != null && at > prior) {
+        // dollars per row, the bar's strongest row, its net delta and its lowest row
+        let biggest = 0.0
+        let strongest = -1
+        let net = 0.0
+        let low = 0.0
+        let haveLow = false
+        for i in 0..b.len {
+          let c = b.get(i)
+          if c != null && c.total > 0.0 {
+            let usd = c.delta * (c.from + c.to) / 2.0
+            net += usd
+            if math.abs(usd) > biggest {
+              biggest = math.abs(usd)
+              strongest = i
+            }
+            if !haveLow {
+              low = c.from
+              haveLow = true
+            }
+          }
+        }
+        peaks.push(biggest)
+        let ref = math.max(peaks.avg() ?? biggest, 0.000000001)
+        ladder.clear(time: at)
+        for i in 0..b.len {
+          let c = b.get(i)
+          if c != null && c.total > 0.0 {
+            row(c.from, c.to, c.delta * (c.from + c.to) / 2.0, ref, biggest, i == strongest, at)
+          }
+        }
+        lastDrawn = at
+      }
+    }
+  }
+}

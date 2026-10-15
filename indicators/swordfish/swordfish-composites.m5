@@ -1,0 +1,601 @@
+script "Swordfish Composites v2"
+
+// MMT port of the Swordfish Composites (kScript v3, then wrun 0.1.1): closed 30m range TPOs, 70% value area, 50%
+// inclusive/narrower overlap, closed UTC daily/weekly/monthly periods. 30m range occupancy, not native TPO or volume.
+// The method is the kScript's, row for row: POC nearest the profile midpoint then lower, the value area grown one row at a
+// time toward the larger next row with ties going to the side added least recently (the first tie down), Rule 1 pairs,
+// Rule 2 extension against the recomputed composite value area, Rule 3 aggregates (every member overlaps the aggregate
+// value area by 50% and holds its POC inside it), longest qualifying suffix first; see validation/composites_ref.py.
+// As in the kScript, the composites are rebuilt from the calculation window's start (rolling or fixed) on the live bar,
+// once per closed UTC day; MMT's longer 30m history allows wider windows. Manual merges and splits are not ported (MMT
+// settings have no text field).
+
+input (
+  input.section(title: "Composites")
+  cadence = input.select("Daily", title: "Composite period (UTC)", options: ["Daily", "Weekly", "Monthly"])
+  dailyDays = input.int(30, title: "Daily display window (days)", min: 7, max: 365)
+  weeklyWeeks = input.int(13, title: "Weekly display window (weeks)", min: 4, max: 52)
+  monthlyMonths = input.int(3, title: "Monthly display window (months)", min: 2, max: 12)
+  calcDays = input.int(30, title: "Daily calculation window (rolling mode)", min: 7, max: 365)
+  calcWeeks = input.int(13, title: "Weekly calculation window (rolling mode)", min: 4, max: 52)
+  calcMonths = input.int(3, title: "Monthly calculation window (rolling mode)", min: 2, max: 12)
+  anchorDate = input.int(0, title: "Fixed start UTC YYYYMMDD (0 = rolling; Monday / month 1st)", min: 0, max: 99991231)
+  input.section(title: "Rows")
+  manualRow = input.float(0.0, title: "Row price increment (0 = auto 0.05%)", min: 0.0)
+  tick = input.float(0.0, title: "Exchange tick increment (0 = no tick rounding)", min: 0.0)
+  binning = input.select("Floor (kScript)", title: "Price to row", options: ["Floor (kScript)", "Nearest (swordfish engine)"])
+  input.section(title: "Drawing")
+  keep = input.int(8, title: "Recent composites to draw", min: 1, max: 12)
+  showShape = input.bool(true, title: "Show TPO distributions")
+  rayMode = input.select("All levels", title: "Extended levels", options: ["All levels", "POC only", "None"])
+  rayCount = input.int(4, title: "Recent composites with rays", min: 1, max: 12)
+  projectedFill = input.bool(true, title: "Projected value-area shading")
+  captions = input.select("All", title: "Dates inside composites", options: ["All", "Recent two", "None"])
+  priceLabels = input.bool(true, title: "Price labels on extended levels (right edge)")
+  labelSpacing = input.float(0.3, title: "Minimum label spacing (% of price)", min: 0.0, max: 5.0, description: "Labels closer than this to a newer composite's label are skipped.")
+  fillStrength = input.int(16, title: "Value-area shading (% opacity, newest)", min: 0, max: 60)
+)
+
+type Candle {
+  t: time
+  o: float
+  h: float
+  l: float
+  c: float
+}
+type Tpo {
+  start: time
+  end: time
+  members: int
+  lo: int
+  hi: int
+  poc: int
+  vah: int
+  val: int
+  first: int
+  last: int
+}
+type Levels {
+  poc: int
+  vah: int
+  val: int
+}
+
+setup (
+  maxSpan = 4096
+  ringSize = 20000
+  maxBuckets = 50000
+  maxPeriods = 400
+  maxShape = 440
+  nearest = binning == "Nearest (swordfish engine)"
+  period = tf(cadence == "Daily" ? "1D" : cadence == "Weekly" ? "1W" : "1M")
+  unit = cadence == "Daily" ? "D" : cadence == "Weekly" ? "W" : "M"
+  rayDays = cadence == "Daily" ? 30 : cadence == "Weekly" ? 90 : 180
+  palette = color.scale(at: [0.0, 0.5, 1.0], colors: [#58d9cc, #689fe5, #aa83c7])
+  pocInk = #ded7c1
+  zones = entities.boxPool(max: 40)
+  shapes = entities.boxPool(max: 460)
+  levelLines = entities.linePool(max: 80)
+  caps = entities.labelPool(max: 40, anchor: anchor.right)
+)
+
+data chart = subscribe(data.ohlcv)
+// 30m candles the calculation window needs, plus a period of margin (a fixed start may reach back up to the ring)
+setup needBars = anchorDate > 0 ? 20000 : cadence == "Daily" ? (calcDays + 2) * 48 : cadence == "Weekly" ? (calcWeeks + 2) * 336 : (calcMonths + 2) * 1488
+data m30 = subscribe(data.ohlcv, timeframe: 30m, history: needBars)
+
+window details = window(title: cadence + " composites") {
+  levels: table.new([
+    table.col(title: "Composite", width: 0.7),
+    table.col(title: "Dates (UTC)", width: 1.3),
+    table.col(title: "VAH", align: align.right),
+    table.col(title: "POC", align: align.right),
+    table.col(title: "VAL", align: align.right),
+  ], title: "Composites", capacity: 40),
+  status: table.new([table.col(title: "Data"), table.col(title: "Details", width: 3.0)], title: "Calculation", capacity: 12),
+}
+
+state (
+  ring = rolling<Candle>(ringSize)
+  lastT: time? = null
+  bucketRows = int[](maxBuckets)
+  bucketCounts = int[](maxBuckets)
+  periods = Tpo[](maxPeriods)
+  done = Tpo[](maxPeriods)
+  pending = int[](maxPeriods)
+  hist = map<int, int>(8192)
+  work = map<int, int>(16384)
+  rowPrice: float = 1.0
+  rowTicks: float = 0.0
+  cutoff: time? = null
+  displayCutoff: time? = null
+  watermark: time? = null
+  firstRowT: time? = null
+  closed: int = 0
+  skipped: int = 0
+  gaps: int = 0
+  rowsUsed: int = 0
+  fault: string = ""
+  drawStart: int = 0
+  builtDay: int = -1
+)
+
+// ---------------------------------------------------------------- calendar
+// Integer division rounding down ("/" always gives a float).
+fn idiv(a: int, b: int) -> int {
+  return int(math.floor(float(a) / float(b))) ?? 0
+}
+// YYYYMMDD -> UTC midnight, or null when it is not a real date (days-from-civil).
+fn utcStart(value: int) -> time? {
+  let year = idiv(value, 10000)
+  let month = idiv(value - year * 10000, 100)
+  let day = value - year * 10000 - month * 100
+  if year < 1970 || month < 1 || month > 12 || day < 1 || day > 31 { return null }
+  let y = month <= 2 ? year - 1 : year
+  let era = idiv(y, 400)
+  let yoe = y - era * 400
+  let mp = month > 2 ? month - 3 : month + 9
+  let doy = idiv(153 * mp + 2, 5) + day - 1
+  let doe = yoe * 365 + idiv(yoe, 4) - idiv(yoe, 100) + doy
+  let ts = time.fromUnixSeconds((era * 146097 + doe - 719468) * 86400)
+  if time.year(ts) != year || time.month(ts) != month || time.dayOfMonth(ts) != day { return null }
+  return ts
+}
+fn dateLabel(ts: time) -> string {
+  return time.format(ts, "{DD}/{MM}")
+}
+
+// ---------------------------------------------------------------- rows
+fn autoRow(price: float) -> float {
+  let target = price * 0.0005
+  let magnitude = math.floor(math.log10(target) ?? 0.0)
+  let base = math.pow(10.0, magnitude) ?? 1.0
+  let n = target / base
+  let chosen = base * (n <= 1.5 ? 1.0 : n <= 3.5 ? 2.0 : n <= 7.5 ? 5.0 : 10.0)
+  let scale = math.pow(10.0, math.max(0.0, -magnitude)) ?? 1.0
+  return math.floor(chosen * scale + 0.5) / scale
+}
+// The kScript's floor bin: [r*step, (r+1)*step) is row r, tolerating numerical noise at a row edge.
+fn floorRow(price: float, step: float) -> float {
+  let quotient = price / step
+  let edge = math.floor(quotient + 0.5)
+  return math.abs(quotient - edge) <= 0.00000001 ? edge : math.floor(quotient)
+}
+// The swordfish engine's _nearest_row: ROUND_HALF_UP of price / step.
+fn nearestRow(price: float, step: float) -> float {
+  return math.floor(price / step + 0.5)
+}
+fn rowOf(price: float) -> int {
+  if tick > 0.0 {
+    if nearest { return int(nearestRow(nearestRow(price, tick) * tick, rowPrice)) ?? 0 }
+    return int(math.floor(floorRow(price, tick) / rowTicks)) ?? 0
+  }
+  return int(nearest ? nearestRow(price, rowPrice) : floorRow(price, rowPrice)) ?? 0
+}
+
+// ---------------------------------------------------------------- profile resolution (the kScript's resolve)
+// work holds counts for rows lo..hi.
+fn resolve(lo: int, hi: int) -> Levels {
+  let total = 0
+  let maximum = 0
+  let poc = lo
+  let distance = 1000000000000.0
+  let midpoint = (float(lo) + float(hi)) / 2.0
+  for r in lo..(hi + 1) {
+    let n = work.get(r) ?? 0
+    total += n
+    let dist = math.abs(float(r) - midpoint)
+    if n > maximum || (n == maximum && (dist < distance || (dist == distance && r < poc))) {
+      maximum = n
+      poc = r
+      distance = dist
+    }
+  }
+  let included = work.get(poc) ?? 0
+  let up = poc
+  let down = poc
+  let vah = poc
+  let val = poc
+  let side = 0
+  let target = int(math.ceil(float(total) * 0.70)) ?? total
+  for step in 0..(hi - lo + 1) {
+    if included < target {
+      let a = up < hi ? work.get(up + 1) ?? 0 : 0
+      let b = down > lo ? work.get(down - 1) ?? 0 : 0
+      if down <= lo || (up < hi && (a > b || (a == b && side == -1))) {
+        up += 1
+        included += a
+        if a > 0 { vah = up }
+        side = 1
+      } else {
+        down -= 1
+        included += b
+        if b > 0 { val = down }
+        side = -1
+      }
+    }
+  }
+  return Levels { poc: poc, vah: vah, val: val }
+}
+// A profile over the buckets first..last (contiguous periods), rows lo..hi.
+fn build(start: time, end: time, members: int, lo: int, hi: int, first: int, last: int) -> Tpo {
+  work.clear()
+  for q in first..last {
+    let row = bucketRows[q] ?? 0
+    work.set(row, (work.get(row) ?? 0) + (bucketCounts[q] ?? 0))
+  }
+  let lv = resolve(lo, hi)
+  return Tpo { start: start, end: end, members: members, lo: lo, hi: hi, poc: lv.poc, vah: lv.vah, val: lv.val, first: first, last: last }
+}
+fn merge(left: Tpo, right: Tpo) -> Tpo {
+  return build(left.start, right.end, left.members + right.members, math.min(left.lo, right.lo), math.max(left.hi, right.hi), left.first, right.last)
+}
+fn overlap(a: Tpo, b: Tpo) -> float {
+  let shared = math.max(0, math.min(a.vah, b.vah) - math.max(a.val, b.val) + 1)
+  return float(shared) / float(math.min(a.vah - a.val + 1, b.vah - b.val + 1))
+}
+fn none() -> Tpo {
+  let zero = time.fromUnixSeconds(0)
+  return Tpo { start: zero, end: zero, members: 0, lo: 0, hi: 0, poc: 0, vah: 0, val: 0, first: 0, last: 0 }
+}
+// The kScript's buildTpo(i, j) over consecutive closed periods.
+fn span(i: int, j: int) -> Tpo {
+  let a = periods[i] ?? none()
+  let b = periods[j] ?? none()
+  let lo = a.lo
+  let hi = a.hi
+  for k in i..(j + 1) {
+    let p = periods[k] ?? a
+    lo = math.min(lo, p.lo)
+    hi = math.max(hi, p.hi)
+  }
+  return build(a.start, b.end, j - i + 1, lo, hi, a.first, b.last)
+}
+fn finish(active: Tpo) {
+  if active.members > 0 && done.len < maxPeriods { done.push(active) }
+}
+
+// ---------------------------------------------------------------- the rebuild (the kScript's isLastBar block)
+fn rebuild() {
+  fault = ""
+  closed = 0
+  skipped = 0
+  gaps = 0
+  rowsUsed = 0
+  drawStart = 0
+  periods.clear()
+  done.clear()
+  pending.clear()
+  bucketRows.clear()
+  bucketCounts.clear()
+  hist.clear()
+  let newest = ring[ring.len - 1]
+  if newest == null { return }
+  // the kScript's newest row is the forming bracket: here, the bracket after the newest closed candle
+  let mark = newest.t + 30m
+  watermark = mark
+  let latestLo = time.floor(mark, period)
+  let windowN = cadence == "Daily" ? calcDays : cadence == "Weekly" ? calcWeeks : calcMonths
+  let displayN = cadence == "Daily" ? dailyDays : cadence == "Weekly" ? weeklyWeeks : monthlyMonths
+  let cut = time.shiftBars(latestLo, -windowN, tf: period)
+  displayCutoff = time.shiftBars(latestLo, -displayN, tf: period)
+  let oldest = ring[0]
+  if anchorDate > 0 {
+    let fixed = utcStart(anchorDate)
+    if fixed == null || (fixed != null && (time.floor(fixed, period) != fixed || fixed >= latestLo)) {
+      fault = "Invalid fixed UTC start; use a past period boundary"
+    } else if fixed != null {
+      cut = fixed
+      if oldest != null && oldest.t > fixed { fault = "Fixed start unavailable in source history; choose a later start" }
+    }
+  }
+  cutoff = cut
+  // rows = the closed candles at or after the cutoff
+  let first = ring.len
+  for s in 0..ring.len {
+    let candle = ring[ring.len - 1 - s]
+    if candle != null && candle.t >= cut { first = ring.len - 1 - s }
+  }
+  rowsUsed = ring.len - first
+  if rowsUsed < 1 { return }
+  let firstCandle = ring[first] ?? newest
+  firstRowT = firstCandle.t
+  rowPrice = manualRow > 0.0 ? manualRow : autoRow(firstCandle.o)
+  if tick > 0.0 {
+    rowTicks = math.max(1.0, -floorRow(-rowPrice, tick))
+    rowPrice = rowTicks * tick
+  }
+  if anchorDate > 0 && firstCandle.t != cut && fault == "" { fault = "Fixed start missing from source; profiles withheld" }
+
+  let active = none()
+  let lowRow = 2147483647
+  let highRow = -2147483647
+  let session = time.fromUnixSeconds(0)
+  let prior = time.fromUnixSeconds(0)
+  let hasPrior = false
+  let complete = false
+  let bracketCount = 0
+  let periodLo = time.fromUnixSeconds(0)
+  let periodHi = time.fromUnixSeconds(0)
+  let stop = false
+  for s in first..ring.len {
+    let candle = ring[s]
+    if candle != null && !stop && fault == "" {
+      let ts = candle.t
+      if cadence == "Monthly" && ts >= latestLo {
+        stop = true
+      } else {
+        if ts >= periodHi {
+          periodLo = time.floor(ts, period)
+          periodHi = time.next(periodLo, period)
+        }
+        if hasPrior && ts != prior + 30m {
+          gaps += 1
+          complete = false
+          finish(active)
+          active = none()
+          pending.clear()
+        }
+        if session != periodLo {
+          hist.clear()
+          lowRow = 2147483647
+          highRow = -2147483647
+          session = periodLo
+          complete = ts == session
+          bracketCount = 0
+        }
+        let badBar = !time.isAligned(ts, 30m) || !(candle.h >= candle.l && candle.l > 0.0 && candle.o > 0.0 && candle.c > 0.0) || (hasPrior && ts <= prior)
+        prior = ts
+        hasPrior = true
+        if badBar {
+          fault = "Invalid source bars; profiles withheld"
+        } else {
+          let lo = rowOf(candle.l)
+          let hi = rowOf(candle.h)
+          lowRow = math.min(lowRow, lo)
+          highRow = math.max(highRow, hi)
+          if highRow - lowRow > maxSpan - 1 {
+            fault = "Row span exceeds 4096; increase row increment"
+          } else {
+            for r in lo..(hi + 1) { hist.set(r, (hist.get(r) ?? 0) + 1) }
+            bracketCount += 1
+            if ts + 30m == periodHi {
+              let expected = idiv(time.durationSeconds(periodHi - periodLo), 1800)
+              if complete && bracketCount == expected {
+                closed += 1
+                work.clear()
+                for r in lowRow..(highRow + 1) {
+                  let n = hist.get(r) ?? 0
+                  if n > 0 { work.set(r, n) }
+                }
+                let lv = resolve(lowRow, highRow)
+                let firstBucket = bucketRows.len
+                for r in lowRow..(highRow + 1) {
+                  let n = hist.get(r) ?? 0
+                  if n > 0 && bucketRows.len < maxBuckets {
+                    bucketRows.push(r)
+                    bucketCounts.push(n)
+                  }
+                }
+                if periods.len >= maxPeriods || bucketRows.len >= maxBuckets {
+                  fault = "Calculation window too large; shorten it or increase the row increment"
+                } else {
+                  let p = Tpo { start: session, end: periodHi, members: 1, lo: lowRow, hi: highRow, poc: lv.poc, vah: lv.vah, val: lv.val, first: firstBucket, last: bucketRows.len }
+                  let pIndex = periods.len
+                  periods.push(p)
+                  if active.members > 0 && p.start == active.end && overlap(active, p) >= 0.50 {
+                    // Rule 2: the composite grows when the new period overlaps its recomputed value area
+                    active = merge(active, p)
+                  } else {
+                    finish(active)
+                    active = none()
+                    pending.push(pIndex)
+                    // longest qualifying suffix first; single periods are never composites
+                    let found = false
+                    for start in 0..(pending.len - 1) {
+                      if !found {
+                        let a = pending[start] ?? 0
+                        let b = pending[pending.len - 1] ?? 0
+                        let cand = span(a, b)
+                        let passes = true
+                        if cand.members == 2 {
+                          // Rule 1
+                          passes = overlap(periods[a] ?? cand, periods[a + 1] ?? cand) >= 0.50
+                        } else {
+                          // Rule 3
+                          for j in start..pending.len {
+                            let member = periods[pending[j] ?? 0] ?? cand
+                            passes = passes && overlap(member, cand) >= 0.50 && member.poc >= cand.val && member.poc <= cand.vah
+                          }
+                        }
+                        if passes {
+                          active = cand
+                          found = true
+                        }
+                      }
+                    }
+                    if found { pending.clear() }
+                  }
+                }
+              } else {
+                skipped += 1
+                finish(active)
+                active = none()
+                pending.clear()
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  finish(active)
+  let from = math.max(0, done.len - keep)
+  for k in 0..done.len {
+    let p = done[k]
+    if p != null && k >= from && k == from && p.end <= (displayCutoff ?? p.end) { from += 1 }
+  }
+  drawStart = from
+}
+
+// ---------------------------------------------------------------- drawing
+fn caption(p: Tpo) -> string {
+  return str.format("{0}{1} {2} to {3}", p.members, unit, dateLabel(p.start), dateLabel(p.end - 1s))
+}
+// A row price as text: as many decimals as the row increment needs.
+fn priceText(v: float) -> string {
+  let d = math.max(0.0, -math.floor(math.log10(rowPrice) ?? 0.0))
+  if d < 0.5 { return str.format("{0:.0}", v) }
+  if d < 1.5 { return str.format("{0:.1}", v) }
+  if d < 2.5 { return str.format("{0:.2}", v) }
+  if d < 3.5 { return str.format("{0:.3}", v) }
+  if d < 4.5 { return str.format("{0:.4}", v) }
+  return str.format("{0:.6}", v)
+}
+fn price(row: int) -> float {
+  return float(row) * rowPrice
+}
+fn drawAll() {
+  zones.clear("z")
+  shapes.clear("s")
+  levelLines.clear("l")
+  caps.clear("c")
+  details.levels.clear()
+  let now = watermark ?? time.fromUnixSeconds(0)
+  let barSpan = time.nominalDuration(context.timeframe)
+  let projectEnd = now + time.seconds(time.durationSeconds(barSpan) * 12)
+  let shown = done.len - drawStart
+  if fault == "" {
+    for k in drawStart..done.len {
+      let p = done[k]
+      if p != null {
+        let age = math.max(0.0, float(time.durationSeconds(now - p.end)) / 86400.0)
+        let fraction = math.min(1.0, age / float(rayDays))
+        let shade = palette.sample(fraction)
+        let vah = price(p.vah)
+        let poc = price(p.poc)
+        let val = price(p.val)
+        let recent = age <= float(rayDays) && k >= done.len - rayCount
+        let zoneAlpha = int(255.0 * float(fillStrength) * (1.0 - 0.5 * fraction) / 100.0) ?? 20
+        let dated = captions == "All" || (captions == "Recent two" && k >= done.len - 2)
+        zones.get("z", k).set(p.start, vah, p.end, val, color: color.withAlpha(shade, zoneAlpha), borderWidth: 1, borderColor: color.withAlpha(shade, int(230.0 - 100.0 * fraction) ?? 160), text: dated ? caption(p) : "", textColor: shade, textSize: 12, textHAlign: "right", textVAlign: "top", textWrap: false)
+        if projectedFill && rayMode == "All levels" && recent && p.vah > p.val {
+          zones.get("z", "f", k).set(p.end, vah, projectEnd, val, color: color.withAlpha(shade, int(255.0 * (6.0 - 3.0 * fraction) / 100.0) ?? 8), borderWidth: 0)
+        }
+        for n in 0..3 {
+          let level = n == 0 ? vah : n == 1 ? poc : val
+          let style = n == 1 ? linestyle.dotted : linestyle.solid
+          levelLines.get("l", k, n).set(p.start, level, p.end, level, width: n == 1 ? 2.0 : 1.0, color: shade, style: style, zIndex: 3)
+          if rayMode != "None" && (rayMode == "All levels" || n == 1) && recent {
+            let rayInk = color.withAlpha(shade, int(255.0 * (65.0 - 45.0 * fraction) / 100.0) ?? 50)
+            levelLines.get("l", "r", k, n).set(p.end, level, now, level, width: 1.0, color: rayInk, style: style, extend: extend.right, zIndex: 1)
+          }
+        }
+        // the distribution: display-only grouping keeps the boxes under the budget; VA, POC and merging use the row grid
+        if showShape {
+          work.clear()
+          for q in p.first..p.last {
+            let row = bucketRows[q] ?? 0
+            work.set(row, (work.get(row) ?? 0) + (bucketCounts[q] ?? 0))
+          }
+          let per = math.max(1, idiv(maxShape, math.max(1, shown)))
+          let stride = math.max(1, idiv(p.hi - p.lo + per, per))
+          let groups = idiv(p.hi - p.lo, stride) + 1
+          let maximum = 1
+          for g in 0..groups {
+            let r = p.lo + g * stride
+            let total = 0
+            for s in r..math.min(r + stride, p.hi + 1) { total += work.get(s) ?? 0 }
+            maximum = math.max(maximum, total)
+          }
+          let width = float(time.durationSeconds(p.end - p.start)) * 0.32
+          for g in 0..groups {
+            let r = p.lo + g * stride
+            let total = 0
+            for s in r..math.min(r + stride, p.hi + 1) { total += work.get(s) ?? 0 }
+            if total > 0 {
+              let ink = r <= p.poc && p.poc < r + stride ? pocInk : shade
+              let right = p.start + time.seconds(int(width * float(total) / float(maximum)) ?? 1)
+              shapes.get("s", k, g).set(p.start, price(math.min(r + stride, p.hi + 1)), right, price(r), color: color.withAlpha(ink, 82), borderWidth: 0, zIndex: 1)
+            }
+          }
+        }
+        details.levels.row(str.format("{0}", 100 + k),
+          table.cell(str.format("{0}{1}", p.members, unit), fg: shade),
+          table.cell(str.format("{0} to {1}", dateLabel(p.start), dateLabel(p.end - 1s)), fg: shade),
+          table.cell(vah, align: align.right),
+          table.cell(poc, align: align.right),
+          table.cell(val, align: align.right))
+      }
+    }
+  }
+  // right-edge price labels for the extended levels, newest composites first; a label too close to one already
+  // placed is skipped, so the newer composite's level keeps its label
+  if fault == "" && priceLabels && rayMode != "None" {
+    let placed = float[](40)
+    let gap = labelSpacing / 100.0
+    for back in 0..(done.len - drawStart) {
+      let k = done.len - 1 - back
+      let p = done[k]
+      if p != null {
+        let age = math.max(0.0, float(time.durationSeconds(now - p.end)) / 86400.0)
+        let fraction = math.min(1.0, age / float(rayDays))
+        let shade = palette.sample(fraction)
+        let recent = age <= float(rayDays) && k >= done.len - rayCount
+        if recent {
+          for n in 0..3 {
+            if rayMode == "All levels" || n == 1 {
+              let level = price(n == 0 ? p.vah : n == 1 ? p.poc : p.val)
+              let tooClose = false
+              for other in placed {
+                if other != null && math.abs(other - level) < level * gap { tooClose = true }
+              }
+              if !tooClose && placed.len < 40 {
+                placed.push(level)
+                let name = n == 0 ? "VAH" : n == 1 ? "POC" : "VAL"
+                caps.get("c", k, n).set(8, level, str.format("{0}{1} {2} {3}", p.members, unit, name, priceText(level)), color: shade, size: 11, textAlign: "right", zIndex: 5)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  let mode = anchorDate > 0 ? "fixed" : "rolling"
+  let from = cutoff
+  let note = fault != "" ? fault : closed < 2 ? "Need 2 complete UTC periods" : gaps > 0 ? "Source gaps: affected periods excluded" : (firstRowT ?? now) > (cutoff ?? now) ? "History shorter than requested" : ""
+  details.status.row("1", "Calculation", str.format("{0} | 30m range TPO | {1} bins | 70% VA | 50% merge", cadence, nearest ? "nearest" : "floor"))
+  details.status.row("2", "Row", rowPrice)
+  details.status.row("3", "Window", from != null ? str.format("from {0} UTC ({1})", time.format(from, "{DD}/{MM}/{YYYY}"), mode) : "waiting")
+  details.status.row("4", "Periods", str.format("{0} closed | {1} incomplete | {2} gaps | {3} bars", closed, skipped, gaps, rowsUsed))
+  details.status.row("5", "Status", note != "" ? note : str.format("{0} composites drawn", shown))
+  script.setTitle(str.format("Swordfish Composites | {0} | row {1} | {2} {3} | {4} closed{5}", cadence, rowPrice, mode, from != null ? dateLabel(from) : "-", closed, note != "" ? " | " + note : ""))
+}
+
+// ---------------------------------------------------------------- handlers
+on m30.close {
+  let ts = m30.time
+  let o = m30.open
+  let h = m30.high
+  let l = m30.low
+  let c = m30.close
+  if ts != null && o != null && h != null && l != null && c != null {
+    let prior = lastT
+    if prior == null || (prior != null && ts > prior) {
+      ring.push(Candle { t: ts, o: o, h: h, l: l, c: c })
+      lastT = ts
+    }
+  }
+}
+// Composites change only when a UTC day closes, so they are rebuilt once per closed day, on the live bar.
+on chart.update {
+  let newest = lastT
+  if chart.isLast && newest != null {
+    let day = idiv(time.durationSeconds(time.dayStart(newest + 30m) - time.fromUnixSeconds(0)), 86400)
+    if day != builtDay {
+      rebuild()
+      drawAll()
+      builtDay = day
+    }
+  }
+}
