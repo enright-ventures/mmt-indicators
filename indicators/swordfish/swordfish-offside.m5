@@ -60,7 +60,7 @@ input (
   showEntries = input.bool(true, title: "Longs' and shorts' average entries")
   halfLifeHours = input.float(48.0, title: "Half-life in hours", min: 1.0, max: 2000.0, description: "Positions opened this many hours ago count half.")
   input.section(title: "Data")
-  rowSize = input.float(0.0, title: "Row size in price (0 = auto, as the delta ladder)", min: 0.0, description: "Auto: 0.06% of price on 30m, scaled by the square root of the timeframe, as the delta ladder.")
+  rowSize = input.float(0.0, title: "Row size in price (0 = auto, as the delta ladder)", min: 0.0, description: "Auto: the average range of the last 100 bars divided by 10 (the delta ladder's default rows per bar), on a 1/2/2.5/5 grid, never below the tick size; changes only when that range doubles or halves.")
   venue = input.select("Perps: Binance, Bybit, OKX, Hyperliquid", title: "Volume, OI and liquidations from", options: ["Chart venue", "Binance + Bybit perps", "Perps: Binance, Bybit, OKX, Hyperliquid"])
   memory = input.int(200, title: "Typical row: bars remembered", min: 20, max: 2000)
   input.section(title: "Look")
@@ -128,6 +128,7 @@ plot (
 state (
   step: float = 0.0
   peaks = rolling<float>(memory)
+  ranges = rolling<float>(100)
   // the lookback's highs, lows, cumulative delta and times, oldest first
   highs = rolling<float>(divLook)
   lows = rolling<float>(divLook)
@@ -608,8 +609,15 @@ on chart.close {
   let c = chart.close
   let t = chart.time
   if o != null && h != null && l != null && c != null && t != null {
-    if step <= 0.0 {
-      step = rowSize > 0.0 ? rowSize : niceStep(c * 0.0006 * tfScale)
+    // row size as the delta ladder: a tenth of the recent average bar range, changed only when it doubles or halves
+    ranges.push(h - l)
+    let avgRange = ranges.avg() ?? 0.0
+    let tick = markets.tickSize(context.exchange, context.symbol) ?? 0.0
+    let auto = math.max(ranges.len >= 20 && avgRange > 0.0 ? niceStep(avgRange / 10.0) : niceStep(c * 0.0006 * tfScale), tick)
+    if rowSize > 0.0 {
+      step = rowSize
+    } else if step <= 0.0 || auto >= step * 2.0 || auto <= step / 2.0 {
+      step = auto
     }
 
     // close zones that this bar closed through

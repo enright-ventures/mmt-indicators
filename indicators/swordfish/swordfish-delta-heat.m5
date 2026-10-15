@@ -13,7 +13,8 @@ script "Swordfish Delta Heat"
 
 input (
   input.section(title: "Rows")
-  rowSize = input.float(0.0, title: "Row size in price (0 = auto)", min: 0.0, description: "Auto: 0.06% of price on 30m, scaled by the square root of the timeframe (a bar's typical range grows that way), on a 1/2/2.5/5 grid: BTC near 82k gives $25 on 5m, $50 on 30m, $100 on 1h, $200 on 4h. Bigger rows leave more room for the numbers.")
+  rowSize = input.float(0.0, title: "Row size in price (0 = auto)", min: 0.0, description: "Auto: the average range of the last 100 bars divided by Rows per typical bar, on a 1/2/2.5/5 grid and never below the tick size. It changes only when that range doubles or halves. BTC 30m gives $50; high-volatility alts get proportionally bigger rows. Bigger rows leave more room for the numbers.")
+  rowsPerBar = input.int(10, title: "Rows per typical bar (auto row size)", min: 3, max: 40)
   venue = input.select("Perps: Binance, Bybit, OKX, Hyperliquid", title: "Volume from", options: ["Chart venue", "Binance + Bybit perps", "Perps: Binance, Bybit, OKX, Hyperliquid"])
   input.section(title: "Look")
   showNumbers = input.bool(true, title: "Delta numbers")
@@ -42,6 +43,7 @@ plot ladder = plot.cells(title: "Delta ladder", columns: 1, scale: cellscale.uni
 
 state (
   peaks = rolling<float>(memory)
+  ranges = rolling<float>(100)
   step: float = 0.0
   lastDrawn: time? = null
 )
@@ -133,8 +135,20 @@ on clock.close {
 // Closed bars: the volume snapshot, once per bar.
 on chart.close {
   let price = chart.close
-  if step <= 0.0 && price != null {
-    step = rowSize > 0.0 ? rowSize : niceStep(price * 0.0006 * tfScale)
+  let hh = chart.high
+  let ll = chart.low
+  if hh != null && ll != null { ranges.push(hh - ll) }
+  if price != null {
+    // row size: fixed if set, else a tenth (by default) of the recent average bar range, changed only when that
+    // range doubles or halves; before 20 bars, 0.06% of price scaled by the timeframe
+    let avgRange = ranges.avg() ?? 0.0
+    let tick = markets.tickSize(context.exchange, context.symbol) ?? 0.0
+    let auto = math.max(ranges.len >= 20 && avgRange > 0.0 ? niceStep(avgRange / float(rowsPerBar)) : niceStep(price * 0.0006 * tfScale), tick)
+    if rowSize > 0.0 {
+      step = rowSize
+    } else if step <= 0.0 || auto >= step * 2.0 || auto <= step / 2.0 {
+      step = auto
+    }
   }
   if step > 0.0 {
     let b = vol.bucketsByStep(step)
