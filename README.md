@@ -25,7 +25,7 @@ The full reference, with a visual key for every line and marker, is [`docs/sword
 | **Swordfish Calendar VWAP** (`swordfish-calendar-vwap.m5`) | Weekly, monthly, quarterly and yearly VWAPs with ±1 SD (VAH/VAL), current, previous and older periods, labelled (e.g. `2026 Q1 VAH`) | 30m (W/M) and 4h (Q/Y) candles, Binance + Bybit perps pooled |
 | **Swordfish Rolling VWAP** (`swordfish-rolling-vwap.m5`) | Trailing 7D, 30D and 365D VWAPs | 30m and daily candles, Binance + Bybit perps pooled |
 | **Swordfish Delta Heat** (`swordfish-delta-heat.m5`) | A delta ladder on every candle: net aggressive buying or selling per price row, in dollars, length relative to the candle's largest row, colour against a typical bar | MMT volume snapshots, Binance + Bybit + OKX + Hyperliquid perps |
-| **Swordfish Offside** (`swordfish-offside.m5`) | Failed breakdowns and breakouts, measured from individual trades (pressed size, average fill, large prints, reclaim volume) with break-flow and counterflow proxies; delta divergences, reaction zones and flow-weighted prices | Trades (MMT Ultra), 5m candles, open interest and liquidations, four perps |
+| **Swordfish Offside** (`swordfish-offside.m5`) | Failed breakdowns and breakouts, measured from individual trades (pressed size, average fill, large prints, reclaim volume) with break-flow and counterflow proxies; delta divergences, reaction zones and flow-weighted prices | Trades (MMT Ultra), 5m candles, open interest and liquidations; Binance, Bybit and OKX perps |
 | **Swordfish Bar Stats** (`swordfish-bar-stats.m5`) | A table under the chart: long and short liquidations, signed +L and +S flow proxies, volume split with net delta | Open interest, liquidations and candles, four perps |
 
 ### Offside's trap definition
@@ -42,9 +42,12 @@ reclaim holds. On 5m bars, whatever the chart timeframe:
    prints of $100k or more, and **reclaim x**, the opposite aggression back on the reclaimed side from the reclaim
    through the successful hold divided by the pressed size (workshop 11's reclaim on volume). Pressed covers broken
    bars through the reclaim close; holding bars add only reclaim volume. A failed reclaim resets reclaim volume.
-   All prints are loaded, and each selected venue's buy and sell totals must match its aligned 5m candle within
-   0.0001% or 1e-8 coins, whichever is larger. Partial, missing, late or mismatched data withhold trade readings for
-   that trap. Without complete trade data a trap falls back to the break VWAP (HLC3 weighted by volume).
+   Venues: Binance, Bybit and OKX perps (Hyperliquid is not used). All prints are loaded, and on every bar each
+   venue's buy and sell trade totals must be within 10% of its 5m candle (setting), or off by no more than 1% of the
+   pooled volume. MMT's trade feeds run slightly short of candle volume on some venues (Bybit about 95%), so an exact
+   match withheld trade readings on about half of all bars. A missing venue or side still fails. Each trap shows the
+   share of candle volume its trades covered ("trades 98% of vol"). Without covered trade data a trap falls back to
+   the break VWAP (HLC3 weighted by volume).
 6. **Flow proxies from candles and OI**: `+S = (dOI - D) / 2` and `+L = (dOI + D) / 2` cannot identify positions or
    participants. "Break flow proxy" sums the positive proxy over the break, including the reclaim bar; "Counterflow
    proxy" sums its opposite sign after the hold, in coins. Measured net flow since the hold is shown beside it.
@@ -91,9 +94,9 @@ side is described at the bottom right; every trap is in the script's "Recent tra
 - MMT keeps per-price volume snapshots for about the last 1,000 bars. The ladder, the reaction zones and the old wick
   markers only exist for that span.
 - Offside's trap detection looks back 5 days of 5m bars. Its 4h swing levels use about 50 days of 4h bars.
-- Offside's trade layer loads the last 24 hours of unfiltered trades from the selected perps. Coverage reconciliation
-  requires all prints; this loads more data than the former size-filtered tape. Its cold-start time and live
-  performance have not been revalidated. Lower "Trade history (hours)" to reduce the load.
+- Offside's trade layer loads the last 24 hours of unfiltered trades from the selected perps: about 6 million on BTC,
+  which took about 6.5 minutes from a cold start in a visible tab (seconds once loaded). Lower "Trade history (hours)"
+  to load faster. A minimized or background tab loads far slower, and two MMT tabs on one workspace compete.
 
 ## Checks and backtests
 

@@ -39,15 +39,15 @@ for (const match of state.matchAll(/^  (\w+): (?:float|int|bool|time\??) = (\d+(
 }
 for (const match of state.matchAll(/^  (\w+) = (?:float|int|bool|time|string)\[\]\(/gm)) context[match[1]] = [];
 Object.assign(context, {
-  useTrades: true, useChart: true, useAll: false, lsBn: true, lsBb: false, lsOk: false, lsHl: false,
+  useTrades: true, useChart: true, useAll: false, lsBn: true, lsBb: false, lsOk: false,
   step: 1, rowSize: 0, tfScale: 1, showTraps: true, pokePct: 0.03, holdBars: 3,
-  reclaimBars: 12, trackHours: 24, coin: 'coins', bigUsd: 100000,
+  reclaimBars: 12, trackHours: 24, coin: 'coins', bigUsd: 100000, coverPct: 90,
   prevC5: 101, lastTrap: new Map(),
   lvP: [100], lvSide: [1], lvExp: [999999], lvState: [0], lvName: ['support'],
   ...input.state,
 });
-context.addTrap = (side, at, from, qty, ext, pain, lvl, name, stopped, wick, flowOk, pressed, fill, big, back, tradeOk) =>
-  context.events.push({side, at, qty, pressed, fill, big, back, tradeOk});
+context.addTrap = (side, at, from, qty, ext, pain, lvl, name, stopped, wick, flowOk, pressed, fill, big, back, tradeOk, cover) =>
+  context.events.push({side, at, qty, pressed, fill, big, back, tradeOk, cover});
 for (const value of Object.values(context)) {
   if (Array.isArray(value)) Object.defineProperty(value, 'clear', {value() { this.length = 0; }});
 }
@@ -60,7 +60,7 @@ vm.runInContext(translate(block('on p5.close {')), context);
 for (const bar of input.bars ?? []) {
   for (const tr of bar.trades ?? []) context.onTrade(tr.price, tr.size, tr.buy, tr.time ?? bar.time, tr.venue ?? 4);
   context.p5 = {time: bar.time, high: 103, low: 99, close: 102, volume: 1, buyVolume: 0, sellVolume: 0, ...bar.candle};
-  for (const venue of ['bn5', 'bb5', 'ok5', 'hl5']) context[venue] = { ...context.p5, ...bar[venue] };
+  for (const venue of ['bn5', 'bb5', 'ok5']) context[venue] = { ...context.p5, ...bar[venue] };
   context.oi5 = {time: bar.time, open: 0, close: 0, ...bar.oi};
   context.liq5 = {buyLiq: 0, sellLiq: 0};
   context.closeBar();

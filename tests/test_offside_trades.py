@@ -125,18 +125,18 @@ def test_price_failure_flush_and_expiry_still_end_tracking(close, low, t):
 
 @pytest.mark.parametrize("chart,all_venues", [(True, False), (False, False), (False, True)])
 def test_complete_selected_venues_are_accepted(chart, all_venues):
-    ids = [4] if chart else list(range(4 if all_venues else 2))
+    ids = [4] if chart else list(range(3 if all_venues else 2))
     bars = []
     for t in (300, 600, 900, 1200):
         buy = t != 300
         b = bar(t, 101 if t == 300 else 102, low=98 if t == 300 else 99)
         b["trades"] = [dict(price=101 if buy else 99, size=i + 1, buy=buy, venue=i) for i in ids]
-        for i, venue in enumerate(("bn5", "bb5", "ok5", "hl5")):
+        for i, venue in enumerate(("bn5", "bb5", "ok5")):
             b[venue] = {"buyVolume": i + 1 if buy else 0, "sellVolume": 0 if buy else i + 1}
         b["candle"].update(buyVolume=sum(i + 1 for i in ids) if buy else 0,
                            sellVolume=0 if buy else sum(i + 1 for i in ids))
         bars.append(b)
-    state = {"useChart": chart, "useAll": all_venues, "lsBb": True, "lsOk": True, "lsHl": True}
+    state = {"useChart": chart, "useAll": all_venues, "lsBb": True, "lsOk": True}
     event, = run(bars, state)["events"]
     assert event["tradeOk"]
     assert event["pressed"] == sum(i + 1 for i in ids)
@@ -160,3 +160,34 @@ def test_pooled_totals_cannot_hide_missing_volume_at_one_venue():
     bars = [first] + [bar(t, 102) for t in (600, 900, 1200)]
     event, = run(bars, {"useChart": False, "lsBb": True})["events"]
     assert not event["tradeOk"]
+
+
+@pytest.mark.parametrize("cover_pct,ok", [(90, True), (100, False)])
+def test_feed_shortfall_within_coverage_setting_is_accepted(cover_pct, ok):
+    # MMT's trade feed runs a few percent short of candle volume on some venues (Bybit about 95%).
+    first = bar(300, 101, [(99, 95, False)], low=98)
+    first["candle"]["sellVolume"] = 100
+    bars = [first] + [bar(t, 102, [(101, 1, True)]) for t in (600, 900, 1200)]
+    event, = run(bars, {"coverPct": cover_pct})["events"]
+    assert event["tradeOk"] is ok
+    if ok:
+        assert event["pressed"] == 95
+        assert abs(event["cover"] - 98 / 103) < 1e-9
+
+
+@pytest.mark.parametrize("short,ok", [(0.5, True), (3, False)])
+def test_small_venue_noise_within_one_percent_of_pooled_volume_is_accepted(short, ok):
+    first = bar(300, 101, low=98)
+    first["trades"] = [dict(price=99, size=100, buy=False, venue=0),
+                       dict(price=99, size=4 - short, buy=False, venue=1)]
+    first["bn5"] = {"buyVolume": 0, "sellVolume": 100}
+    first["bb5"] = {"buyVolume": 0, "sellVolume": 4}
+    bars = [first]
+    for t in (600, 900, 1200):
+        hold = bar(t, 102)
+        hold["trades"] = [dict(price=101, size=1, buy=True, venue=0)]
+        hold["bn5"] = {"buyVolume": 1, "sellVolume": 0}
+        hold["bb5"] = {"buyVolume": 0, "sellVolume": 0}
+        bars.append(hold)
+    event, = run(bars, {"useChart": False, "lsBb": True})["events"]
+    assert event["tradeOk"] is ok

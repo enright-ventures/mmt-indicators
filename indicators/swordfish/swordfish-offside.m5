@@ -31,6 +31,7 @@ input (
   useTrades = input.bool(true, title: "Measure the break from individual trades", description: "Needs MMT Ultra (historical trades in scripts). Without it, only trades since the script started are measured.")
   tradeHours = input.int(24, title: "Trade history (hours)", min: 1, max: 168, description: "Traps older than this show proxies only. Longer history loads more trades: all prints are loaded to verify coverage against each venue's candle volume.")
   bigUsd = input.float(100000.0, title: "Large print from ($)", min: 1000.0)
+  coverPct = input.float(90.0, title: "Trades must match each venue's candle volume within (%)", min: 50.0, max: 100.0, description: "Each selected venue's buy and sell trade totals must be within this share of its 5m candle volume. MMT's trade feeds run slightly short of candle volume on some venues (Bybit about 95%), so an exact match withholds most traps.")
   input.section(title: "Old wick markers")
   showWick = input.bool(false, title: "Trapped-wick markers (the earlier method)")
   wickMin = input.float(0.35, title: "Wick at least this share of the bar's range", min: 0.05, max: 0.95)
@@ -47,7 +48,7 @@ input (
   halfLifeHours = input.float(48.0, title: "Half-life in hours", min: 1.0, max: 2000.0, description: "Proxy weights from this many hours ago count half; these are not position inventories.")
   input.section(title: "Data")
   rowSize = input.float(0.0, title: "Row size in price (0 = auto, as the delta ladder)", min: 0.0, description: "Auto: the average range of the last 100 bars divided by 10 (the delta ladder's default rows per bar), on a 1/2/2.5/5 grid, never below the tick size; changes only when that range doubles or halves.")
-  venue = input.select("Perps: Binance, Bybit, OKX, Hyperliquid", title: "Volume, OI and liquidations from", options: ["Chart venue", "Binance + Bybit perps", "Perps: Binance, Bybit, OKX, Hyperliquid"])
+  venue = input.select("Perps: Binance, Bybit, OKX", title: "Volume, OI and liquidations from", options: ["Chart venue", "Binance + Bybit perps", "Perps: Binance, Bybit, OKX"])
   memory = input.int(200, title: "Typical row: bars remembered", min: 20, max: 2000)
   input.section(title: "Look")
   buyColor = input.color(color.rgb(92, 156, 255), title: "Buying / trapped shorts")
@@ -60,8 +61,8 @@ input (
 setup (
   coin = str.startsWith(context.symbol, "btc") ? "BTC" : str.startsWith(context.symbol, "eth") ? "ETH" : str.startsWith(context.symbol, "sol") ? "SOL" : "coins"
   useChart = venue == "Chart venue"
-  useAll = venue == "Perps: Binance, Bybit, OKX, Hyperliquid"
-  source = venue == "Binance + Bybit perps" ? markets.agg("binancef", "bybitf") : venue == "Chart venue" ? context.exchange : markets.agg("binancef", "bybitf", "hyperliquid", "okxf")
+  useAll = venue == "Perps: Binance, Bybit, OKX"
+  source = venue == "Binance + Bybit perps" ? markets.agg("binancef", "bybitf") : venue == "Chart venue" ? context.exchange : markets.agg("binancef", "bybitf", "okxf")
   tfSec = float(time.tfSeconds(context.timeframe))
   tfScale = math.sqrt(tfSec / 1800.0) ?? 1.0
   divLook = math.min(2000, math.max(4, int(math.floor(divHours * 3600.0 / tfSec)) ?? 20))
@@ -81,21 +82,18 @@ data (
   bnC = subscribe(data.ohlcv, exchange: "binancef")
   bbC = subscribe(data.ohlcv, exchange: "bybitf")
   okC = subscribe(data.ohlcv, exchange: "okxf")
-  hlC = subscribe(data.ohlcv, exchange: "hyperliquid")
   oiAgg = subscribe(data.oi, exchange: source)
   // traps run on 5m bars: price from the chart's market, flow from the chosen venues
   p5 = subscribe(data.ohlcv, timeframe: 5m, history: 1500)
   bn5 = subscribe(data.ohlcv, exchange: "binancef", timeframe: 5m, history: 1500)
   bb5 = subscribe(data.ohlcv, exchange: "bybitf", timeframe: 5m, history: 1500)
   ok5 = subscribe(data.ohlcv, exchange: "okxf", timeframe: 5m, history: 1500)
-  hl5 = subscribe(data.ohlcv, exchange: "hyperliquid", timeframe: 5m, history: 1500)
   oi5 = subscribe(data.oi, exchange: source, timeframe: 5m, history: 1500)
   liq5 = subscribe(data.stat, exchange: source, timeframe: 5m, history: 1500)
   // individual trades for the break measurements (history needs MMT Ultra)
   tBn = subscribe(data.trades, exchange: "binancef", history: useTrades && (useAll || usePair) ? tradeHist : noHist)
   tBb = subscribe(data.trades, exchange: "bybitf", history: useTrades && (useAll || usePair) ? tradeHist : noHist)
   tOk = subscribe(data.trades, exchange: "okxf", history: useTrades && useAll ? tradeHist : noHist)
-  tHl = subscribe(data.trades, exchange: "hyperliquid", history: useTrades && useAll ? tradeHist : noHist)
   tCh = subscribe(data.trades, history: useTrades && useChart ? tradeHist : noHist)
   // levels: 4h swings and, when any VWAP level is on, the VWAPs (a year and a half of 4h candles)
   h4 = subscribe(data.ohlcv, timeframe: 4h, history: anyVwap ? 3300 : 300)
@@ -110,6 +108,7 @@ window traps = window(title: "Recent traps") {
     table.col(title: "Avg fill", align: align.right),
     table.col(title: "Large", align: align.right),
     table.col(title: "Reclaim x", align: align.right),
+    table.col(title: "Trades of vol", align: align.right),
     table.col(title: "Stopped out", align: align.right),
     table.col(title: "Stop", align: align.right),
     table.col(title: "Break flow proxy", align: align.right),
@@ -225,7 +224,6 @@ state (
   lsBn: bool = false
   lsBb: bool = false
   lsOk: bool = false
-  lsHl: bool = false
   // the 5m bar's trades (bTime, unix s), bucketed by price in 0.01% rows from the bar's first trade: sells and buys,
   // price x size, and large prints per row; totals and the price range
   bTime: float = 0.0
@@ -248,7 +246,7 @@ state (
   bTotBuy: float = 0.0
   bTotBuyPv: float = 0.0
   bTotBuyBig: float = 0.0
-  // Raw buy/sell totals per selected venue (Binance, Bybit, OKX, Hyperliquid, chart).
+  // Raw buy/sell totals per selected venue (Binance, Bybit, OKX, unused, chart).
   // The most recently measured bar survives rollover until its candle-close handler checks coverage.
   bVenueBuy = float[](5)
   bVenueSell = float[](5)
@@ -256,6 +254,14 @@ state (
   measuredSell = float[](5)
   measuredTime: float = 0.0
   measuredGood: bool = false
+  // this bar's trade and candle volume over the selected venues, and per level over the credited bars
+  covTrade: float = 0.0
+  covCandle: float = 0.0
+  poolBuy: float = 0.0
+  poolSell: float = 0.0
+  lvCovT = float[](120)
+  lvCovC = float[](120)
+  fCover = float[](40)
   // per level, one 5m bar's trades measured against it (mBar = that bar): sells below and buys above
   mBar = float[](120)
   mSell = float[](120)
@@ -283,7 +289,6 @@ fn ensureListed() {
     lsBn = markets.tickSize("binancef", context.symbol) != null
     lsBb = markets.tickSize("bybitf", context.symbol) != null
     lsOk = markets.tickSize("okxf", context.symbol) != null
-    lsHl = markets.tickSize("hyperliquid", context.symbol) != null
     listedSet = true
   }
 }
@@ -295,23 +300,23 @@ fn candleOk(t: time, ct: time?, bv: float?, sv: float?) -> bool {
 // Every listed selected venue has this bar's candle, at least one does.
 fn flowReady5(t: time) -> bool {
   if useChart { return candleOk(t, p5.time, p5.buyVolume, p5.sellVolume) }
-  let any = lsBn || lsBb || (useAll && (lsOk || lsHl))
+  let any = lsBn || lsBb || (useAll && lsOk)
   return any && (!lsBn || candleOk(t, bn5.time, bn5.buyVolume, bn5.sellVolume)) && (!lsBb || candleOk(t, bb5.time, bb5.buyVolume, bb5.sellVolume)) &&
-    (!useAll || ((!lsOk || candleOk(t, ok5.time, ok5.buyVolume, ok5.sellVolume)) && (!lsHl || candleOk(t, hl5.time, hl5.buyVolume, hl5.sellVolume))))
+    (!useAll || !lsOk || candleOk(t, ok5.time, ok5.buyVolume, ok5.sellVolume))
 }
 
 fn flowReadyClosed(t: time) -> bool {
   if useChart { return candleOk(t, chart.time, chart.buyVolume, chart.sellVolume) }
-  let any = lsBn || lsBb || (useAll && (lsOk || lsHl))
+  let any = lsBn || lsBb || (useAll && lsOk)
   return any && (!lsBn || candleOk(t, bnC.time, bnC.buyVolume, bnC.sellVolume)) && (!lsBb || candleOk(t, bbC.time, bbC.buyVolume, bbC.sellVolume)) &&
-    (!useAll || ((!lsOk || candleOk(t, okC.time, okC.buyVolume, okC.sellVolume)) && (!lsHl || candleOk(t, hlC.time, hlC.buyVolume, hlC.sellVolume))))
+    (!useAll || !lsOk || candleOk(t, okC.time, okC.buyVolume, okC.sellVolume))
 }
 
 fn flowReadyLive(t: time) -> bool {
   if useChart { return candleOk(t, chart.forming.time, chart.forming.buyVolume, chart.forming.sellVolume) }
-  let any = lsBn || lsBb || (useAll && (lsOk || lsHl))
+  let any = lsBn || lsBb || (useAll && lsOk)
   return any && (!lsBn || candleOk(t, bnC.forming.time, bnC.forming.buyVolume, bnC.forming.sellVolume)) && (!lsBb || candleOk(t, bbC.forming.time, bbC.forming.buyVolume, bbC.forming.sellVolume)) &&
-    (!useAll || ((!lsOk || candleOk(t, okC.forming.time, okC.forming.buyVolume, okC.forming.sellVolume)) && (!lsHl || candleOk(t, hlC.forming.time, hlC.forming.buyVolume, hlC.forming.sellVolume))))
+    (!useAll || !lsOk || candleOk(t, okC.forming.time, okC.forming.buyVolume, okC.forming.sellVolume))
 }
 
 // One 5m bar's bucketed trades measured against level k: sells below it and buys above it. A row is placed by its
@@ -514,6 +519,8 @@ fn addLevel(price: float, side: float, name: string, expires: float) {
     lvBack.push(0.0)
     lvTradeOk.push(false)
     mBar.push(0.0)
+    lvCovT.push(0.0)
+    lvCovC.push(0.0)
     mSell.push(0.0)
     mSellPv.push(0.0)
     mSellBig.push(0.0)
@@ -562,6 +569,7 @@ fn drawTrap(k: int, now: time) {
     tradeOk ? str.format("{0:,.0}", fFill[k] ?? 0.0) : "-",
     tradeOk && pressed > 0.0 ? str.format("{0:.0%}", (fBig[k] ?? 0.0) / pressed) : "-",
     tradeOk && pressed > 0.0 ? str.format("{0:.1}x", (fBack[k] ?? 0.0) / pressed) : "-",
+    tradeOk ? str.format("{0:.0%}", math.min(fCover[k] ?? 0.0, 1.0)) : "-",
     wick ? "-" : str.format("{0:,.0} {1}", fStopped[k] ?? 0.0, coin),
     str.format("{0:,.0}", fExt[k] ?? 0.0),
     flowOk ? str.format("{0:,.0} {1}", fQty[k] ?? 0.0, coin) : "-",
@@ -578,7 +586,7 @@ fn trapLine(k: int, name: string) -> string {
   let tradeOk = fTradeOk[k] ?? false
   let pressed = fPressed[k] ?? 0.0
   let measured = wick ? str.format("{0:,.0} {1} in the wick", fQty[k] ?? 0.0, coin) :
-    tradeOk ? str.format("pressed {0:,.0} {1} {2} at avg {3:,.0} ({4:.0%} large) | reclaim {5:.1}x", pressed, coin, side > 0.0 ? "below" : "above", fFill[k] ?? 0.0, pressed > 0.0 ? (fBig[k] ?? 0.0) / pressed : 0.0, pressed > 0.0 ? (fBack[k] ?? 0.0) / pressed : 0.0) :
+    tradeOk ? str.format("pressed {0:,.0} {1} {2} at avg {3:,.0} ({4:.0%} large) | reclaim {5:.1}x | trades {6:.0%} of vol", pressed, coin, side > 0.0 ? "below" : "above", fFill[k] ?? 0.0, pressed > 0.0 ? (fBig[k] ?? 0.0) / pressed : 0.0, pressed > 0.0 ? (fBack[k] ?? 0.0) / pressed : 0.0, math.min(fCover[k] ?? 0.0, 1.0)) :
     str.format("no trade data | break VWAP {0:,.0}", fFill[k] ?? 0.0)
   let stopped = wick ? "" : str.format(" | {0:,.0} {1} liq", fStopped[k] ?? 0.0, side > 0.0 ? "longs" : "shorts")
   let est = (fCounterOk[k] ?? false) ? str.format(" | counterflow proxy {0:,.0} {1}", fDone[k] ?? 0.0, coin) : " | counterflow unavailable"
@@ -588,7 +596,7 @@ fn trapLine(k: int, name: string) -> string {
 
 // A new trap into the next ring slot, with its marker. qty is the positive break-flow proxy; pressed, fill, big
 // and back come from trades when tradeOk.
-fn addTrap(side: float, at: time, from: time, qty: float, ext: float, pain: float, lvl: float, name: string, stopped: float, wick: bool, flowOk: bool, pressed: float, avgFill: float, big: float, back: float, tradeOk: bool) {
+fn addTrap(side: float, at: time, from: time, qty: float, ext: float, pain: float, lvl: float, name: string, stopped: float, wick: bool, flowOk: bool, pressed: float, avgFill: float, big: float, back: float, tradeOk: bool, cover: float) {
   let k = fNext
   let line = tradeOk ? avgFill : pain
   if fSide.len < 40 {
@@ -613,6 +621,7 @@ fn addTrap(side: float, at: time, from: time, qty: float, ext: float, pain: floa
     fBig.push(big)
     fBack.push(back)
     fTradeOk.push(tradeOk)
+    fCover.push(cover)
     fNet.push(0.0)
   } else {
     fSide[k] = side
@@ -636,6 +645,7 @@ fn addTrap(side: float, at: time, from: time, qty: float, ext: float, pain: floa
     fBig[k] = big
     fBack[k] = back
     fTradeOk[k] = tradeOk
+    fCover[k] = cover
     fNet[k] = 0.0
   }
   fNext = k + 1 >= 40 ? 0 : k + 1
@@ -733,10 +743,6 @@ on tOk.trade(tr) {
   ensureListed()
   if useTrades && useAll && lsOk { onTrade(tr.price, tr.size, tr.isBuy, tr.time, 2) }
 }
-on tHl.trade(tr) {
-  ensureListed()
-  if useTrades && useAll && lsHl { onTrade(tr.price, tr.size, tr.isBuy, tr.time, 3) }
-}
 on tCh.trade(tr) { if useTrades && useChart { onTrade(tr.price, tr.size, tr.isBuy, tr.time, 4) }
 }
 
@@ -768,23 +774,32 @@ on h4.close {
   }
 }
 
-// Require both sides of each selected venue's unfiltered tape to match its aligned candle.
-// A partial first bar, a delayed venue, or discarded late trades cannot be labelled complete.
-// Tolerance covers floating-point summation only (one part per million, or 1e-8 coins).
-fn volumeMatches(actual: float, expected: float?) -> bool {
+// Require both sides of each selected venue's unfiltered tape to match its aligned candle within the coverage
+// setting, or miss by no more than 1% of the pooled side (so a small venue's feed noise does not withhold the bar);
+// 100% means floating-point summation only (one part per million, or 1e-8 coins). A partial first bar, a missing
+// venue, or discarded late trades fail it. Matched volume is summed for the trap's coverage readout.
+fn volumeMatches(actual: float, expected: float?, pooled: float) -> bool {
   if expected == null { return false }
-  return math.isFinite(expected) && expected >= 0.0 && math.abs(actual - expected) <= math.max(0.00000001, math.abs(expected) * 0.000001)
+  let tol = math.max(1.0 - coverPct / 100.0, 0.000001)
+  let slack = coverPct >= 100.0 ? 0.0 : pooled * 0.01
+  return math.isFinite(expected) && expected >= 0.0 && math.abs(actual - expected) <= math.max(0.00000001, math.max(math.abs(expected) * tol, slack))
 }
 
 fn venueCovered(i: int, bv: float?, sv: float?) -> bool {
-  return volumeMatches(measuredBuy[i] ?? 0.0, bv) && volumeMatches(measuredSell[i] ?? 0.0, sv)
+  covTrade += (measuredBuy[i] ?? 0.0) + (measuredSell[i] ?? 0.0)
+  covCandle += (bv ?? 0.0) + (sv ?? 0.0)
+  return volumeMatches(measuredBuy[i] ?? 0.0, bv, poolBuy) && volumeMatches(measuredSell[i] ?? 0.0, sv, poolSell)
 }
 
 fn tradeCoverageReady(t: time) -> bool {
+  covTrade = 0.0
+  covCandle = 0.0
+  poolBuy = useChart ? (p5.buyVolume ?? 0.0) : (lsBn ? bn5.buyVolume ?? 0.0 : 0.0) + (lsBb ? bb5.buyVolume ?? 0.0 : 0.0) + (useAll ? (lsOk ? ok5.buyVolume ?? 0.0 : 0.0) : 0.0)
+  poolSell = useChart ? (p5.sellVolume ?? 0.0) : (lsBn ? bn5.sellVolume ?? 0.0 : 0.0) + (lsBb ? bb5.sellVolume ?? 0.0 : 0.0) + (useAll ? (lsOk ? ok5.sellVolume ?? 0.0 : 0.0) : 0.0)
   if !useTrades || !measuredGood || measuredTime != unix(t) || !flowReady5(t) { return false }
   if useChart { return venueCovered(4, p5.buyVolume, p5.sellVolume) }
   return (!lsBn || venueCovered(0, bn5.buyVolume, bn5.sellVolume)) && (!lsBb || venueCovered(1, bb5.buyVolume, bb5.sellVolume)) &&
-    (!useAll || ((!lsOk || venueCovered(2, ok5.buyVolume, ok5.sellVolume)) && (!lsHl || venueCovered(3, hl5.buyVolume, hl5.sellVolume))))
+    (!useAll || !lsOk || venueCovered(2, ok5.buyVolume, ok5.sellVolume))
 }
 
 // Pressed covers broken bars through the reclaim close. Back covers the successful reclaim through the hold.
@@ -801,6 +816,10 @@ fn creditBar(k: int, dir: float, now: float, withPressed: bool, withBack: bool, 
     lvPressedPv[k] = (lvPressedPv[k] ?? 0.0) + (withPressed ? (mBuyPv[k] ?? 0.0) : 0.0)
     lvBig[k] = (lvBig[k] ?? 0.0) + (withPressed ? (mBuyBig[k] ?? 0.0) : 0.0)
     lvBack[k] = (lvBack[k] ?? 0.0) + (withBack ? (mSell[k] ?? 0.0) : 0.0)
+  }
+  if ok {
+    lvCovT[k] = (lvCovT[k] ?? 0.0) + covTrade
+    lvCovC[k] = (lvCovC[k] ?? 0.0) + covCandle
   }
   lvTradeOk[k] = (lvTradeOk[k] ?? false) && ok
 }
@@ -819,8 +838,8 @@ on p5.close {
     if useTrades && bTime == now { measureAll() }
     let tradesCovered = tradeCoverageReady(t)
     // Signed flow proxies over the chosen venues.
-    let bv = useChart ? (p5.buyVolume ?? 0.0) : (bn5.buyVolume ?? 0.0) + (bb5.buyVolume ?? 0.0) + (useAll ? (ok5.buyVolume ?? 0.0) + (hl5.buyVolume ?? 0.0) : 0.0)
-    let sv = useChart ? (p5.sellVolume ?? 0.0) : (bn5.sellVolume ?? 0.0) + (bb5.sellVolume ?? 0.0) + (useAll ? (ok5.sellVolume ?? 0.0) + (hl5.sellVolume ?? 0.0) : 0.0)
+    let bv = useChart ? (p5.buyVolume ?? 0.0) : (bn5.buyVolume ?? 0.0) + (bb5.buyVolume ?? 0.0) + (useAll ? (ok5.buyVolume ?? 0.0) : 0.0)
+    let sv = useChart ? (p5.sellVolume ?? 0.0) : (bn5.sellVolume ?? 0.0) + (bb5.sellVolume ?? 0.0) + (useAll ? (ok5.sellVolume ?? 0.0) : 0.0)
     let d = bv - sv
     let oo = oi5.open
     let oc = oi5.close
@@ -886,6 +905,8 @@ on p5.close {
                 lvV[k] = vv
                 lvFrom[k] = t
                 lvPressed[k] = 0.0
+                lvCovT[k] = 0.0
+                lvCovC[k] = 0.0
                 lvPressedPv[k] = 0.0
                 lvBig[k] = 0.0
                 lvBack[k] = 0.0
@@ -942,7 +963,7 @@ on p5.close {
                     let name = str.format("{0} {1:,.0}", lvName[k] ?? "", L)
                     let pr = lvPressed[k] ?? 0.0
                     let tOk = (lvTradeOk[k] ?? false) && pr > 0.0
-                    addTrap(dir, t, lvFrom[k] ?? t, lvNew[k] ?? 0.0, lvFlush[k] ?? L, pain, L, name, lvStop[k] ?? 0.0, false, lvFlowOk[k] ?? false, pr, tOk ? (lvPressedPv[k] ?? 0.0) / pr : pain, lvBig[k] ?? 0.0, lvBack[k] ?? 0.0, tOk)
+                    addTrap(dir, t, lvFrom[k] ?? t, lvNew[k] ?? 0.0, lvFlush[k] ?? L, pain, L, name, lvStop[k] ?? 0.0, false, lvFlowOk[k] ?? false, pr, tOk ? (lvPressedPv[k] ?? 0.0) / pr : pain, lvBig[k] ?? 0.0, lvBack[k] ?? 0.0, tOk, (lvCovC[k] ?? 0.0) > 0.0 ? (lvCovT[k] ?? 0.0) / (lvCovC[k] ?? 1.0) : 0.0)
                   }
                 }
               }
@@ -993,8 +1014,8 @@ on chart.close {
     }
 
     // Fade proxy weights, add positive flow at HLC3, reduce weight on negative flow.
-    let bv = useChart ? chart.buyVolume : (bnC.buyVolume ?? 0.0) + (bbC.buyVolume ?? 0.0) + (useAll ? (okC.buyVolume ?? 0.0) + (hlC.buyVolume ?? 0.0) : 0.0)
-    let sv = useChart ? chart.sellVolume : (bnC.sellVolume ?? 0.0) + (bbC.sellVolume ?? 0.0) + (useAll ? (okC.sellVolume ?? 0.0) + (hlC.sellVolume ?? 0.0) : 0.0)
+    let bv = useChart ? chart.buyVolume : (bnC.buyVolume ?? 0.0) + (bbC.buyVolume ?? 0.0) + (useAll ? (okC.buyVolume ?? 0.0) : 0.0)
+    let sv = useChart ? chart.sellVolume : (bnC.sellVolume ?? 0.0) + (bbC.sellVolume ?? 0.0) + (useAll ? (okC.sellVolume ?? 0.0) : 0.0)
     let oo = oiAgg.open
     let oc = oiAgg.close
     if flowReadyClosed(t) && oiAgg.time == t && bv != null && sv != null && oo != null && oc != null {
@@ -1127,10 +1148,10 @@ on chart.close {
       if showWick && haveRef && range > 0.0 {
         let barEnd = time.fromUnixSeconds(int(unix(t) + float(time.tfSeconds(context.timeframe)) - 300.0) ?? 0)
         if (h - bodyTop) / range >= wickMin && upUsd >= trapMult * ref {
-          addTrap(-1.0, barEnd, t, math.max(upCoins, 0.000000001), h, upBuyCoins > 0.0 ? upBuyUsd / upBuyCoins : h, h, str.concat("wick ", money(upUsd)), 0.0, true, false, 0.0, h, 0.0, 0.0, false)
+          addTrap(-1.0, barEnd, t, math.max(upCoins, 0.000000001), h, upBuyCoins > 0.0 ? upBuyUsd / upBuyCoins : h, h, str.concat("wick ", money(upUsd)), 0.0, true, false, 0.0, h, 0.0, 0.0, false, 0.0)
         }
         if (bodyLow - l) / range >= wickMin && -lowUsd >= trapMult * ref {
-          addTrap(1.0, barEnd, t, math.max(-lowCoins, 0.000000001), l, lowSellCoins < 0.0 ? lowSellUsd / lowSellCoins : l, l, str.concat("wick ", money(lowUsd)), 0.0, true, false, 0.0, l, 0.0, 0.0, false)
+          addTrap(1.0, barEnd, t, math.max(-lowCoins, 0.000000001), l, lowSellCoins < 0.0 ? lowSellUsd / lowSellCoins : l, l, str.concat("wick ", money(lowUsd)), 0.0, true, false, 0.0, l, 0.0, 0.0, false, 0.0)
         }
       }
     }
@@ -1169,8 +1190,8 @@ on chart.update {
     }
   }
   if showEntries {
-    let bv = useChart ? chart.forming.buyVolume : (bnC.forming.buyVolume ?? 0.0) + (bbC.forming.buyVolume ?? 0.0) + (useAll ? (okC.forming.buyVolume ?? 0.0) + (hlC.forming.buyVolume ?? 0.0) : 0.0)
-    let sv = useChart ? chart.forming.sellVolume : (bnC.forming.sellVolume ?? 0.0) + (bbC.forming.sellVolume ?? 0.0) + (useAll ? (okC.forming.sellVolume ?? 0.0) + (hlC.forming.sellVolume ?? 0.0) : 0.0)
+    let bv = useChart ? chart.forming.buyVolume : (bnC.forming.buyVolume ?? 0.0) + (bbC.forming.buyVolume ?? 0.0) + (useAll ? (okC.forming.buyVolume ?? 0.0) : 0.0)
+    let sv = useChart ? chart.forming.sellVolume : (bnC.forming.sellVolume ?? 0.0) + (bbC.forming.sellVolume ?? 0.0) + (useAll ? (okC.forming.sellVolume ?? 0.0) : 0.0)
     let oo = oiAgg.forming.open
     let oc = oiAgg.forming.close
     let h = chart.forming.high
