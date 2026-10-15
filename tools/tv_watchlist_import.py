@@ -2,7 +2,7 @@
 
 TradingView's "Export list" file is comma-separated EXCHANGE:SYMBOL entries; ".P" marks a perpetual and "###Name"
 starts a section. MMT watchlists have no sections, so sections are listed in the report only, and the markets are
-added in file order.
+new markets are added in file order; retained markets keep their existing order.
 
 Usage:
   python3 tv_watchlist_import.py                 # pick the file in a macOS dialog (opens in Downloads)
@@ -18,6 +18,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import urllib.request
 
 PROJECT = "/Users/Shared/Projects/stable-workshop"
@@ -32,7 +33,7 @@ EXCHANGES = {
     "KRAKEN": (None, "kraken"),
     "BITGET": ("bitgetf", "bitget"),
 }
-QUOTES = ("USDT", "USDC", "USD", "FDUSD", "BUSD")
+QUOTES = ("FDUSD", "USDT", "USDC", "BUSD", "USD")
 
 
 def endpoint():
@@ -62,11 +63,16 @@ class M5:
         d = json.loads(lines[-1] if lines else text)
         if "error" in d:
             raise RuntimeError(d["error"])
+        if d.get("result", {}).get("isError"):
+            raise RuntimeError("MMT rejected the tool call; watchlist replacement stopped")
         out = "".join(c.get("text", "") for c in d.get("result", {}).get("content", []))
         try:
-            return json.loads(out)
-        except ValueError:
-            return out
+            result = json.loads(out)
+        except ValueError as error:
+            raise RuntimeError("MMT returned an unstructured response") from error
+        if not isinstance(result, dict):
+            raise RuntimeError("MMT returned an unexpected response type")
+        return result
 
 
 def pick_file():
@@ -141,39 +147,68 @@ def main():
         print(f"  skipped {tv}: {why}")
     if dry:
         return
+    if not mapped:
+        sys.exit("No supported markets to import; watchlist unchanged.")
     m5 = M5()
-    if tab is None:
-        status = m5.call("m5_get_status", {})
-        sessions = sorted(status.get("sessions", []), key=lambda s: s.get("lastSeenAt", ""))
-        if not sessions:
-            sys.exit("MMT is not open in a browser.")
-        tab = sessions[-1]["tabId"]
-        if widget is None:
-            for w in sessions[-1].get("widgets", []):
-                if w.get("type") == "watchlist":
-                    widget = w["widgetId"]
+    status = m5.call("m5_get_status", {})
+    sessions = sorted(status.get("sessions", []), key=lambda s: s.get("lastSeenAt", ""))
+    sessions = [s for s in sessions if tab is None or s["tabId"] == tab]
+    if not sessions:
+        sys.exit("Requested MMT session is not open.")
+    session = sessions[-1]
+    tab = session["tabId"]
+    watchlists = [w["widgetId"] for w in session.get("widgets", []) if w.get("type") == "watchlist"]
+    if widget is None and len(watchlists) > 1:
+        sys.exit("Several watchlists are open; select one with --widget.")
+    if widget is None and watchlists:
+        widget = watchlists[0]
     base = {"targetTabId": tab}
     if widget is not None:
         base["widgetId"] = widget
-    current = m5.call("watchlist_list", base) if widget is not None else {}
-    rows = (current.get("data", current) or {}).get("markets", []) if isinstance(current, dict) else []
-    for r in rows:
-        mk = r.get("market", r)
-        m5.call("watchlist_remove", dict(base, market={"exchange": mk["exchange"], "symbol": mk["symbol"]}))
-    print(f"removed {len(rows)} markets from the watchlist")
+    current = m5.call("watchlist_list", base) if widget is not None else {"markets": []}
+    if not isinstance(current, dict) or current.get("ok") is False:
+        sys.exit("Could not read the existing watchlist; nothing changed.")
+    payload = current.get("data", current)
+    if not isinstance(payload, dict):
+        sys.exit("Unrecognised watchlist response; nothing changed.")
+    rows = payload.get("markets")
+    if not isinstance(rows, list):
+        sys.exit("Unrecognised watchlist response; nothing changed.")
+    original = [r.get("market", r) for r in rows]
+    original_keys = {(mk["exchange"], mk["symbol"]) for mk in original}
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix=os.path.basename(path) + ".mmt-backup-", suffix=".json", dir=os.path.dirname(os.path.abspath(path)), delete=False) as f:
+        backup = f.name
+        json.dump({"targetTabId": tab, "widgetId": widget, "markets": original}, f, indent=2)
+    print(f"Recovery snapshot: {backup}")
     failed = []
+    added = 0
     for section, tv, (ex, sym) in mapped:
+        if (ex, sym) in original_keys:
+            continue
         res = m5.call("watchlist_add", dict(base, market={"exchange": ex, "symbol": sym}))
-        ok = isinstance(res, dict) and res.get("ok", True) is not False
-        if not ok:
+        ok = isinstance(res, dict) and res.get("ok") is True
+        if ok:
+            added += 1
+        else:
             failed.append((tv, res.get("message") if isinstance(res, dict) else res))
         if widget is None and isinstance(res, dict):
             widget = (res.get("data") or {}).get("widgetId", widget)
             if widget is not None:
                 base["widgetId"] = widget
-    print(f"added {len(mapped) - len(failed)} markets" + (f", {len(failed)} failed:" if failed else ""))
+    print(f"added {added} markets" + (f", {len(failed)} failed:" if failed else ""))
     for tv, msg in failed:
         print(f"  {tv}: {msg}")
+    if failed:
+        sys.exit("Replacement stopped; all original markets were retained. Successful additions remain.")
+    wanted = {m for _, _, m in mapped}
+    removed = 0
+    for mk in original:
+        if (mk["exchange"], mk["symbol"]) not in wanted:
+            res = m5.call("watchlist_remove", dict(base, market={"exchange": mk["exchange"], "symbol": mk["symbol"]}))
+            if not isinstance(res, dict) or res.get("ok") is not True:
+                sys.exit(f"Removal failed; replacement is partial. Recover using {backup}")
+            removed += 1
+    print(f"removed {removed} old markets; replacement complete")
 
 
 if __name__ == "__main__":
