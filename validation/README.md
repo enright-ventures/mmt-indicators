@@ -1,3 +1,29 @@
+> Review correction (2026-10-15): the results below are historical records, not validation of the revised indicators. The 21-month swing study used two-sided levels and excluded reclaim-bar flow; the current detector uses fixed-side swings and includes that bar. Run offside_traps_htf.py for the separately labelled current fixed-side report, using the same engine as offside_traps_mmt_replica.py. NL/NS, entry and unwind terminology in old records refers to flow proxies, not measured positions. Weekly calendar keys now start Monday. Rolling windows now include the forming candle within (not beyond) the stated candle count, so the old rolling comparison must be rerun.
+
+## Review-fix verification (2026-10-15)
+
+- 18 regression tests pass: quote mapping, empty/partial/failed watchlist replacement and recovery snapshots, retained markets, fixed-side traps, reclaim-bar flow, missing flow, invalidation/expiry, and Monday week boundaries.
+- MMT `script_check` returned `{"status":"ok","errors":[]}` for all six changed indicators: Offside, Bar Stats, Positioning NL/NS, Rolling VWAP, Delta Heat and FLIMP.
+- Changed Python files compile; `git diff --check` passes. Basedpyright on the new engine, importer and tests reports zero errors and 176 warnings, chiefly dynamic/untyped JSON and legacy helper interfaces; this is not a clean type-check gate.
+- Runtime charts were not updated. Compiler checks do not establish live feed synchronization, subscription performance or visual rendering. Watchlist tests use a stateful fake service and do not mutate a real watchlist. Rolling exchange comparisons have not been rerun for the revised window.
+
+Run regression checks from the repository root:
+
+```sh
+uv run --with pytest --with numpy --with polars pytest -q
+```
+
+### Corrected fixed-side swing run
+
+Ran the current `offside_fixed.find_traps` engine using the cached 187,488 Binance BTCUSDT 5m bars, 4h swings (three bars on each side), 14-day expiry and default MMT pattern settings. The report contains 266 events. The split remains 2025-12-01.
+
+| Pattern | Events | 1R mean, all | First half | Second half | 2h mean return (bp), all |
+|---|---:|---:|---:|---:|---:|
+| Failed breakdown | 138 | +0.06 | +0.02 (71) | +0.11 (67) | +8.0 |
+| Failed breakout | 128 | +0.09 | +0.07 (64) | +0.11 (64) | +4.0 |
+
+These are gross simulated outcomes using the existing stop/target evaluator, without fees or slippage. They are not measured participant positions and do not establish a tradable edge. Raw exchange candles can differ from MMT. The full optional-level comparison was not rerun. To reproduce the current swing section with data under `validation/data/offside/`, run `python validation/offside_traps_htf.py`; it labels the fixed-side report separately from legacy two-sided comparisons.
+
 # Swordfish wrun ports: validation record (2026-10-07)
 
 Market: Binance Futures ETHUSDT. Reference data: Binance USD-M klines (`python3 composites_ref.py fetch`, `python3 vwap_ref.py fetch`).
