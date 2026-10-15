@@ -1,7 +1,7 @@
 -- Import to MMT: replace the watchlist in the open MMT tab with a TradingView watchlist export.
--- Runs openmarket-wrun/mmt/tv_watchlist_import.py (preview first, then replace on confirmation).
+-- Runs tools/tv_watchlist_import.py (preview first, then replace on confirmation).
 set py to "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3"
-set importer to "/Users/Shared/Projects/stable-workshop/openmarket-wrun/mmt/tv_watchlist_import.py"
+set importer to "/Users/Shared/Projects/stable-workshop/mmt-indicators/tools/tv_watchlist_import.py"
 try
 	set f to choose file with prompt "TradingView watchlist to import into MMT" of type {"txt", "public.plain-text"} default location (path to downloads folder)
 on error
