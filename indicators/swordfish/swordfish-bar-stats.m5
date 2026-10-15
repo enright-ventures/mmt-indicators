@@ -7,7 +7,7 @@ script "Swordfish Bar Stats"
 // Net longs / net shorts are derived as in the "Positioning: NL / NS" script, with dOI the bar's open-interest change
 // and D = buy volume - sell volume: NL = (dOI + D) / 2, NS = (dOI - D) / 2 (so NL + NS = dOI, NL - NS = D). They are
 // signed flow proxies, not openings, closings or exchange-reported positions. Long liqs are longs forced out (forced selling, red), short liqs shorts
-// forced out (forced buying, green). Every row covers the chosen perp venues (default Binance, Bybit, OKX, Hyperliquid):
+// forced out (forced buying, green). Every row covers the chosen perp venues (default Binance, Bybit, OKX):
 // open interest and liquidations come from MMT's combined streams; buy and sell volume is each venue's candle summed,
 // since MMT gives scripts no combined candles (the sum matches MMT's combined volume delta to within rounding). Values
 // are in coins; the live bar updates on every tick.
@@ -17,14 +17,14 @@ input (
   upColor = input.color(color.rgb(34, 171, 126), title: "Positive / buying")
   downColor = input.color(color.rgb(214, 72, 92), title: "Negative / selling")
   showNames = input.bool(true, title: "Row names at the right edge")
-  venues = input.select("Perps: Binance, Bybit, OKX, Hyperliquid", title: "Data from", options: ["Chart venue", "Binance + Bybit perps", "Perps: Binance, Bybit, OKX, Hyperliquid"])
+  venues = input.select("Perps: Binance, Bybit, OKX", title: "Data from", options: ["Chart venue", "Binance + Bybit perps", "Perps: Binance, Bybit, OKX"])
 )
 
 setup (
   memory = math.min(2000, math.max(5, int(math.floor(memoryHours * 3600.0 / float(time.tfSeconds(context.timeframe)))) ?? 48))
   useChart = venues == "Chart venue"
-  useAll = venues == "Perps: Binance, Bybit, OKX, Hyperliquid"
-  source = venues == "Binance + Bybit perps" ? markets.agg("binancef", "bybitf") : useChart ? context.exchange : markets.agg("binancef", "bybitf", "hyperliquid", "okxf")
+  useAll = venues == "Perps: Binance, Bybit, OKX"
+  source = venues == "Binance + Bybit perps" ? markets.agg("binancef", "bybitf") : useChart ? context.exchange : markets.agg("binancef", "bybitf", "okxf")
 )
 
 data (
@@ -35,7 +35,6 @@ data (
   bnC = subscribe(data.ohlcv, exchange: "binancef")
   bbC = subscribe(data.ohlcv, exchange: "bybitf")
   okC = subscribe(data.ohlcv, exchange: "okxf")
-  hlC = subscribe(data.ohlcv, exchange: "hyperliquid")
 )
 
 pane statsPane = pane(title: "Bar Stats", height: 0.2)
@@ -76,8 +75,8 @@ fn volumeCell(bv: float, sv: float, peak: float) {
 on chart.update {
   floor.plot(0.0)
   ceiling.plot(5.0)
-  let bv = useChart ? chart.forming.buyVolume : (bnC.forming.buyVolume ?? 0.0) + (bbC.forming.buyVolume ?? 0.0) + (useAll ? (okC.forming.buyVolume ?? 0.0) + (hlC.forming.buyVolume ?? 0.0) : 0.0)
-  let sv = useChart ? chart.forming.sellVolume : (bnC.forming.sellVolume ?? 0.0) + (bbC.forming.sellVolume ?? 0.0) + (useAll ? (okC.forming.sellVolume ?? 0.0) + (hlC.forming.sellVolume ?? 0.0) : 0.0)
+  let bv = useChart ? chart.forming.buyVolume : (bnC.forming.buyVolume ?? 0.0) + (bbC.forming.buyVolume ?? 0.0) + (useAll ? (okC.forming.buyVolume ?? 0.0) : 0.0)
+  let sv = useChart ? chart.forming.sellVolume : (bnC.forming.sellVolume ?? 0.0) + (bbC.forming.sellVolume ?? 0.0) + (useAll ? (okC.forming.sellVolume ?? 0.0) : 0.0)
   let o = oi.forming.open
   let c = oi.forming.close
   if bv != null && sv != null && o != null && c != null {
@@ -107,8 +106,8 @@ on chart.update {
 }
 
 on chart.close {
-  let bv = useChart ? chart.buyVolume : (bnC.buyVolume ?? 0.0) + (bbC.buyVolume ?? 0.0) + (useAll ? (okC.buyVolume ?? 0.0) + (hlC.buyVolume ?? 0.0) : 0.0)
-  let sv = useChart ? chart.sellVolume : (bnC.sellVolume ?? 0.0) + (bbC.sellVolume ?? 0.0) + (useAll ? (okC.sellVolume ?? 0.0) + (hlC.sellVolume ?? 0.0) : 0.0)
+  let bv = useChart ? chart.buyVolume : (bnC.buyVolume ?? 0.0) + (bbC.buyVolume ?? 0.0) + (useAll ? (okC.buyVolume ?? 0.0) : 0.0)
+  let sv = useChart ? chart.sellVolume : (bnC.sellVolume ?? 0.0) + (bbC.sellVolume ?? 0.0) + (useAll ? (okC.sellVolume ?? 0.0) : 0.0)
   let o = oi.open
   let c = oi.close
   if bv != null && sv != null && o != null && c != null {

@@ -16,7 +16,7 @@ input (
   input.section(title: "Rows")
   rowSize = input.float(0.0, title: "Row size in price (0 = auto)", min: 0.0, description: "Auto: the average range of the last 100 bars divided by Rows per typical bar, on a 1/2/2.5/5 grid and never below the tick size. It changes only when that range doubles or halves. BTC 30m gives $50; high-volatility alts get proportionally bigger rows. Bigger rows leave more room for the numbers.")
   rowsPerBar = input.int(10, title: "Rows per typical bar (auto row size)", min: 3, max: 40)
-  venue = input.select("Perps: Binance, Bybit, OKX, Hyperliquid", title: "Volume from", options: ["Chart venue", "Binance + Bybit perps", "Perps: Binance, Bybit, OKX, Hyperliquid"])
+  venue = input.select("Perps: Binance, Bybit, OKX", title: "Volume from", options: ["Chart venue", "Binance + Bybit perps", "Perps: Binance, Bybit, OKX"])
   input.section(title: "Look")
   showNumbers = input.bool(true, title: "Delta numbers")
   memory = input.int(200, title: "Colour scale: bars remembered", min: 20, max: 2000, description: "The typical largest row = the average, over this many bars, of each bar's largest row delta.")
@@ -30,7 +30,7 @@ setup (
   tfSeconds = time.tfSeconds(context.timeframe)
   liveSupported = tfSeconds >= 60 && tfSeconds <= 14400 && math.floor(float(tfSeconds) / 60.0) * 60.0 == float(tfSeconds)
   tfScale = math.sqrt(float(tfSeconds) / 1800.0) ?? 1.0
-  source = venue == "Binance + Bybit perps" ? markets.agg("binancef", "bybitf") : venue == "Chart venue" ? context.exchange : markets.agg("binancef", "bybitf", "hyperliquid", "okxf")
+  source = venue == "Binance + Bybit perps" ? markets.agg("binancef", "bybitf") : venue == "Chart venue" ? context.exchange : markets.agg("binancef", "bybitf", "okxf")
 )
 
 data (

@@ -151,7 +151,7 @@ loaded history instead of rebuilding from the rolling or fixed calculation start
 
 - Rolling VWAP (pooled, rvwap_pooled_ref.py) at bar 1792036800: 7D 82,583.20 vs 82,583.29; 30D 82,809.70 vs 82,809.65; 365D 77,716.35 vs 77,710.91.
 - Calendar VWAP weekly (pooled) at bar 1792038600: VWAP 82,736.90 vs 82,736.97; +1 SD 83,623.48 vs 83,623.54; -1 SD 81,850.33 vs 81,850.40.
-- Built-in OI and delta_volume panes: dataSource {"mode": "venue_basket", "venueMarketIds": [1, 4, 5, 16]} = Binance, Bybit, OKX, Hyperliquid BTC perps.
+- Built-in OI and delta_volume panes: dataSource {"mode": "venue_basket", "venueMarketIds": [1, 4, 5, 16]} = Binance, Bybit, OKX, Hyperliquid BTC perps. (2026-10-15: Hyperliquid removed everywhere; panes and scripts now use Binance, Bybit and OKX. Checks above that pooled four venues predate this.)
 
 ## Workshop-11 traps vs wick markers (2026-10-15)
 

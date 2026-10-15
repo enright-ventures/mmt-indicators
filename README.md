@@ -24,9 +24,9 @@ The full reference, with a visual key for every line and marker, is [`docs/sword
 | **Swordfish Composites v2** (`swordfish-composites.m5`) | TPO value areas of balanced days or weeks, merged when they overlap by 50%; POC, VAH, VAL extended as levels | 30m candles, Binance perps |
 | **Swordfish Calendar VWAP** (`swordfish-calendar-vwap.m5`) | Weekly, monthly, quarterly and yearly VWAPs with ±1 SD (VAH/VAL), current, previous and older periods, labelled (e.g. `2026 Q1 VAH`) | 30m (W/M) and 4h (Q/Y) candles, Binance + Bybit perps pooled |
 | **Swordfish Rolling VWAP** (`swordfish-rolling-vwap.m5`) | Trailing 7D, 30D and 365D VWAPs | 30m and daily candles, Binance + Bybit perps pooled |
-| **Swordfish Delta Heat** (`swordfish-delta-heat.m5`) | A delta ladder on every candle: net aggressive buying or selling per price row, in dollars, length relative to the candle's largest row, colour against a typical bar | MMT volume snapshots, Binance + Bybit + OKX + Hyperliquid perps |
+| **Swordfish Delta Heat** (`swordfish-delta-heat.m5`) | A delta ladder on every candle: net aggressive buying or selling per price row, in dollars, length relative to the candle's largest row, colour against a typical bar | MMT volume snapshots, Binance + Bybit + OKX perps |
 | **Swordfish Offside** (`swordfish-offside.m5`) | Failed breakdowns and breakouts, measured from individual trades (pressed size, average fill, large prints, reclaim volume) with break-flow and counterflow proxies; delta divergences, reaction zones and flow-weighted prices | Trades (MMT Ultra), 5m candles, open interest and liquidations; Binance, Bybit and OKX perps |
-| **Swordfish Bar Stats** (`swordfish-bar-stats.m5`) | A table under the chart: long and short liquidations, signed +L and +S flow proxies, volume split with net delta | Open interest, liquidations and candles, four perps |
+| **Swordfish Bar Stats** (`swordfish-bar-stats.m5`) | A table under the chart: long and short liquidations, signed +L and +S flow proxies, volume split with net delta | Open interest, liquidations and candles, Binance, Bybit and OKX perps |
 
 ### Offside's trap definition
 
@@ -42,7 +42,7 @@ reclaim holds. On 5m bars, whatever the chart timeframe:
    prints of $100k or more, and **reclaim x**, the opposite aggression back on the reclaimed side from the reclaim
    through the successful hold divided by the pressed size (workshop 11's reclaim on volume). Pressed covers broken
    bars through the reclaim close; holding bars add only reclaim volume. A failed reclaim resets reclaim volume.
-   Venues: Binance, Bybit and OKX perps (Hyperliquid is not used). All prints are loaded, and on every bar each
+   Venues: Binance, Bybit and OKX perps. All prints are loaded, and on every bar each
    venue's buy and sell trade totals must be within 10% of its 5m candle (setting), or off by no more than 1% of the
    pooled volume. MMT's trade feeds run slightly short of candle volume on some venues (Bybit about 95%), so an exact
    match withheld trade readings on about half of all bars. A missing venue or side still fails. Each trap shows the
@@ -76,8 +76,8 @@ side is described at the bottom right; every trap is in the script's "Recent tra
   - Swordfish Calendar VWAP: **Panel anchor** Weekly, all four units on, **Value areas and labels on older periods** set to All.
   - Swordfish Delta Heat, Swordfish Rolling VWAP and Swordfish Offside, with default settings.
   - Swordfish Bar Stats, in its own pane.
-  - MMT's built-in **Open Interest** and **Delta Volume** panes, each set to the four perps: the pane's gear, then
-    Aggregate, then Markets.
+  - MMT's built-in **Open Interest** and **Delta Volume** panes, each set to Binance, Bybit and OKX perps: the pane's
+    gear, then Aggregate, then Markets. Hyperliquid is not used anywhere.
 - The settings that count bars are set in hours and the ladder's row size scales with the timeframe, so the same chart
   also works on 5m.
 

@@ -141,8 +141,8 @@ html { scroll-behavior: smooth; }
 <p class="tagline">One 30m chart of BTC/USD on Binance perps. A single chart matters: in a two-chart layout, scripts that wait for the live bar stalled.</p>
 <div class="stack">
   <div><b>Price pane</b><span>Composites (Daily and Weekly), Calendar VWAP (weekly focus with monthly, quarterly and yearly levels), Rolling VWAP (7D, 30D, 365D), the Delta Heat ladder on every candle, and Offside (trap markers, divergences, reaction zones, flow-weighted price proxies).</span></div>
-  <div><b>Open Interest</b><span>MMT built-in, four perps combined, as candles.</span></div>
-  <div><b>Delta Volume</b><span>MMT built-in, four perps combined, buy minus sell volume per bar.</span></div>
+  <div><b>Open Interest</b><span>MMT built-in, Binance, Bybit and OKX perps combined, as candles.</span></div>
+  <div><b>Delta Volume</b><span>MMT built-in, the same three perps combined, buy minus sell volume per bar.</span></div>
   <div><b>Bar Stats</b><span>Swordfish table, one column per bar: Long liqs, Short liqs, +L proxy, +S proxy, Volume.</span></div>
 </div>
 
@@ -201,7 +201,7 @@ html { scroll-behavior: smooth; }
 </div>
 <dl class="rows">
   <dt>Scale</dt><dd>Length is relative to the candle's own largest row, which runs full length and is outlined. Colour strength compares across candles: full colour at 2× a typical bar's largest row (the average over the last 200 bars), so a quiet candle's biggest row is full length but pale.</dd>
-  <dt>Data</dt><dd>MMT's per-bar volume snapshots, summed over Binance, Bybit, OKX and Hyperliquid perps. These cover about the last 1,000 bars (21 days on 30m). The live bar is rebuilt from completed one-minute snapshots, so it is at most a minute behind.</dd>
+  <dt>Data</dt><dd>MMT's per-bar volume snapshots, summed over Binance, Bybit and OKX perps. These cover about the last 1,000 bars (21 days on 30m). The live bar is rebuilt from completed one-minute snapshots, so it is at most a minute behind.</dd>
   <dt>Read it</dt><dd>Heavy buying at the top of a bar that closed lower means buyers paid up and got rejected. Offside turns that into a marker.</dd>
 </dl>
 
@@ -247,7 +247,7 @@ html { scroll-behavior: smooth; }
   <li><b>The break.</b> A 5m bar trades through the level by at least 0.03% of price, coming from the other side.</li>
   <li><b>The reclaim.</b> A 5m close back on the original side within 60 minutes. A break that stays through the level longer than that counts as acceptance, and the level is dropped.</li>
   <li><b>The hold (the trigger).</b> The next three 5m closes (15 minutes) stay on the reclaimed side and the flush extreme is not taken. If a close slips back through within the hour, the break continues; if the flush extreme is taken, there is no trap.</li>
-  <li><b>Measured from trades</b> (MMT Ultra, the last 24 hours by default, Binance, Bybit and OKX perps; Hyperliquid is not used). Each 5m bar's trades are bucketed into 0.01% price rows, and every level under test is measured from them:
+  <li><b>Measured from trades</b> (MMT Ultra, the last 24 hours by default, Binance, Bybit and OKX perps). Each 5m bar's trades are bucketed into 0.01% price rows, and every level under test is measured from them:
     <ul class="tight">
       <li><b>Pressed:</b> aggressive selling executed below a broken support on broken bars through the reclaim close (buying above a broken resistance for failed breakouts); holding bars do not add pressing.</li>
       <li><b>Avg fill:</b> the volume-weighted price of that pressing.</li>
@@ -323,21 +323,21 @@ html { scroll-behavior: smooth; }
 <div class="table-wrap"><table>
   <thead><tr><th>Row</th><th>Meaning</th><th>Source</th></tr></thead>
   <tbody>
-    <tr><td>Long liqs</td><td>Longs forcibly closed on the bar (forced selling, red)</td><td>Binance, Bybit, OKX, Hyperliquid perps</td></tr>
-    <tr><td>Short liqs</td><td>Shorts forcibly closed (forced buying, green)</td><td>Same four venues</td></tr>
-    <tr><td>+L proxy</td><td>Signed +L flow proxy: (dOI + D) / 2</td><td>Same four venues</td></tr>
-    <tr><td>+S proxy</td><td>Signed +S flow proxy: (dOI − D) / 2</td><td>Same four venues</td></tr>
-    <tr><td>Volume</td><td>Buy and sell split, net delta as the number</td><td>Same four venues</td></tr>
+    <tr><td>Long liqs</td><td>Longs forcibly closed on the bar (forced selling, red)</td><td>Binance, Bybit, OKX perps</td></tr>
+    <tr><td>Short liqs</td><td>Shorts forcibly closed (forced buying, green)</td><td>Same three venues</td></tr>
+    <tr><td>+L proxy</td><td>Signed +L flow proxy: (dOI + D) / 2</td><td>Same three venues</td></tr>
+    <tr><td>+S proxy</td><td>Signed +S flow proxy: (dOI − D) / 2</td><td>Same three venues</td></tr>
+    <tr><td>Volume</td><td>Buy and sell split, net delta as the number</td><td>Same three venues</td></tr>
   </tbody>
 </table></div>
-<p>Open interest and liquidations come from MMT's combined streams. MMT gives scripts no combined candles, so buy and sell volume is the four venues' candles summed. That sum matches MMT's combined volume delta to within 0.03 BTC per bar. The "Data from" setting switches to Binance + Bybit or the chart's venue.</p>
+<p>Open interest and liquidations come from MMT's combined streams. MMT gives scripts no combined candles, so buy and sell volume is the three venues' candles summed. That sum matches MMT's combined volume delta to within 0.03 BTC per bar. The "Data from" setting switches to Binance + Bybit or the chart's venue.</p>
 <p>Values are in BTC. The sum of the two proxies equals the change in open interest, and their difference equals the delta. MMT names long liquidations <code>buyLiq</code>. That was checked on 3,000 one-minute bars: minutes with buyLiq averaged −15 bp and minutes with sellLiq +15 bp.</p>
 
 <h2 id="builtins">Open Interest and Delta Volume</h2>
 <p>MMT's built-in panes, added as chart layers.</p>
 <ul class="tight">
-  <li><b>Open Interest:</b> Binance, Bybit, OKX and Hyperliquid perps combined (MMT's "Aggregate" setting, 4 markets). It shows open interest as candles, so you can see whether positions are being added (rising) or closed (falling) during a move.</li>
-  <li><b>Delta Volume:</b> the same four perps combined. It shows each bar's buy minus sell volume.</li>
+  <li><b>Open Interest:</b> Binance, Bybit and OKX perps combined (MMT's "Aggregate" setting, 3 markets). It shows open interest as candles, so you can see whether positions are being added (rising) or closed (falling) during a move.</li>
+  <li><b>Delta Volume:</b> the same three perps combined. It shows each bar's buy minus sell volume.</li>
 </ul>
 <p>They are MMT's own panes; their data source is set in each pane's settings (gear beside the name) under Aggregate → Markets.</p>
 
@@ -348,9 +348,9 @@ html { scroll-behavior: smooth; }
     <tr><td>Composites v2</td><td>Binance perps 30m candles</td><td>Python reference of the kScript method</td><td>Identical (7 daily, 4 weekly)</td></tr>
     <tr><td>Calendar VWAP</td><td>Binance + Bybit perps 30m and 4h</td><td>Binance and Bybit REST candles</td><td>Within 0.01%</td></tr>
     <tr><td>Rolling VWAP</td><td>Binance + Bybit perps 30m and 1D</td><td>Binance and Bybit REST candles</td><td>Within 0.01% (7D and 30D within 10 cents)</td></tr>
-    <tr><td>Delta Heat</td><td>MMT volume snapshots, 4 perps</td><td>MMT's own per-row volumes</td><td>Rows are MMT's figures; live bar from 1m snapshots</td></tr>
+    <tr><td>Delta Heat</td><td>MMT volume snapshots, 3 perps</td><td>MMT's own per-row volumes</td><td>Rows are MMT's figures; live bar from 1m snapshots</td></tr>
     <tr><td>Offside traps</td><td>5m candles, OI and trades, Binance, Bybit and OKX perps; 4h swing levels</td><td>Python replica on Binance 5m data (Binance-only run)</td><td>Same traps: 9/9 STX, 8/8 BTC</td></tr>
-    <tr><td>Bar Stats liquidations</td><td>MMT stats, 4 perps</td><td>Side check on 1m returns</td><td>buyLiq = long liquidations</td></tr>
+    <tr><td>Bar Stats liquidations</td><td>MMT stats, 3 perps</td><td>Side check on 1m returns</td><td>buyLiq = long liquidations</td></tr>
   </tbody>
 </table></div>
 <p>MMT keeps per-row volume for about the last 1,000 bars. Older ladder rows and markers do not exist on MMT, so the longer backtest used Binance's published trades.</p>

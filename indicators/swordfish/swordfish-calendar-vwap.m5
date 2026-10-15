@@ -29,7 +29,7 @@ input (
   labels = input.bool(true, title: "Show price labels")
   bandFill = input.bool(true, title: "Faint fill between VAH and VAL")
   input.section(title: "Sources")
-  venues = input.exchanges(["binancef", "bybitf"], title: "Venues (pooled)", minSelected: 1, maxSelected: 4, description: "Each venue's candles of the chart's market are pooled. Every venue must cover a period completely for it to count: on MMT, Binance and Bybit futures reach 2022, Hyperliquid 2025-03, OKX 2026-01.")
+  venues = input.exchanges(["binancef", "bybitf"], title: "Venues (pooled)", minSelected: 1, maxSelected: 4, description: "Each venue's candles of the chart's market are pooled. Every venue must cover a period completely for it to count: on MMT, Binance and Bybit futures reach 2022, OKX 2026-01.")
   slowTf = input.timeframe(4h, title: "Quarterly/yearly source", description: "4h as the kScript")
 )
 
