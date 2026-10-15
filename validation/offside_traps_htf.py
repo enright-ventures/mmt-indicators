@@ -15,12 +15,13 @@ import math
 import numpy as np
 
 from offside_traps import load, summarise, swings
+from offside_fixed import Bar, Level, find_traps
 from offside_traps_levels import composite_levels, two_sided_traps, DAY_BARS
 
 
 def period_keys(t, unit):
     if unit == "week":
-        return (t + 4 * 86400) // (7 * 86400)
+        return (t + 3 * 86400) // (7 * 86400)
     d = [dt.datetime.fromtimestamp(int(x), dt.timezone.utc) for x in t]
     if unit == "month":
         return np.array([x.year * 12 + x.month - 1 for x in d])
@@ -108,7 +109,18 @@ if __name__ == "__main__":
         sets[f"developing {unit} VAH/VAL"] = [x for x in dev if not x[3].endswith("VWAP")]
     sets["weekly composite VAH/VAL"] = [x for x in composite_levels(b, "Weekly") if x[3].endswith(("VAH", "VAL"))]
     sets["daily composite VAH/VAL"] = [x for x in composite_levels(b, "Daily") if x[3].endswith(("VAH", "VAL"))]
-    sets["4h swing"] = [(a, e, p, k) for a, p, s, k, e in swings(b["t"], b["h"], b["l"], n, 4 * 3600, 3, DAY_BARS * 14, "4h swing")]
+    swing_levels = swings(b["t"], b["h"], b["l"], n, 4 * 3600, 3, DAY_BARS * 14, "4h swing")
+    bars = [Bar(int(t), float(h), float(l), float(c), float(v), float(nl), float(ns))
+            for t, h, l, c, v, nl, ns in zip(b["t"], b["h"], b["l"], b["c"], b["v"], b["nl"], b["ns"])]
+    fixed = [Level(int(a), float(p), int(side), int(b["t"][a]) + 14 * 86400)
+             for a, p, side, kind, expires in swing_levels if a < n]
+    current = [dict(k=e.index, side=e.side, level=e.level, flush=e.flush, trapped=e.flow, pain=e.break_vwap)
+               for e in find_traps(bars, fixed)]
+    print("| **4h swing (current fixed-side MMT rules)** |" + " |" * 10)
+    for side, label in ((1, "failed breakdown"), (-1, "failed breakout")):
+        for line in row(b, [e for e in current if e["side"] == side], label, split):
+            print(line)
+    sets["4h swing (legacy two-sided comparison)"] = [(a, e, p, k) for a, p, s, k, e in swing_levels]
     allhtf = []
     for name, lv in sets.items():
         evs = two_sided_traps(b, lv)

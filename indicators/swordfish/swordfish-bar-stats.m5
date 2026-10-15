@@ -6,7 +6,7 @@ script "Swordfish Bar Stats"
 // as the bar's total volume grows.
 // Net longs / net shorts are derived as in the "Positioning: NL / NS" script, with dOI the bar's open-interest change
 // and D = buy volume - sell volume: NL = (dOI + D) / 2, NS = (dOI - D) / 2 (so NL + NS = dOI, NL - NS = D). They are
-// an estimate, not exchange-reported positions. Long liqs are longs forced out (forced selling, red), short liqs shorts
+// signed flow proxies, not openings, closings or exchange-reported positions. Long liqs are longs forced out (forced selling, red), short liqs shorts
 // forced out (forced buying, green). Every row covers the chosen perp venues (default Binance, Bybit, OKX, Hyperliquid):
 // open interest and liquidations come from MMT's combined streams; buy and sell volume is each venue's candle summed,
 // since MMT gives scripts no combined candles (the sum matches MMT's combined volume delta to within rounding). Values
@@ -100,8 +100,8 @@ on chart.update {
     let ink = color.rgb(170, 178, 190)
     names.get("4").set(6, 4.5, "Long liqs", color: ink, size: 14, textAlign: "right")
     names.get("3").set(6, 3.5, "Short liqs", color: ink, size: 14, textAlign: "right")
-    names.get("2").set(6, 2.5, "Net L", color: ink, size: 14, textAlign: "right")
-    names.get("1").set(6, 1.5, "Net S", color: ink, size: 14, textAlign: "right")
+    names.get("2").set(6, 2.5, "+L proxy", color: ink, size: 14, textAlign: "right")
+    names.get("1").set(6, 1.5, "+S proxy", color: ink, size: 14, textAlign: "right")
     names.get("0").set(6, 0.5, "Volume", color: ink, size: 14, textAlign: "right")
   }
 }
