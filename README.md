@@ -37,17 +37,19 @@ reclaim holds. On 5m bars, whatever the chart timeframe:
 2. **Break**: a 5m bar trades through it by at least 0.03%.
 3. **Reclaim**: a 5m close back on the original side within 60 minutes.
 4. **Hold** (the trigger): three 5m closes stay on that side without taking the flush extreme.
-5. **Measured from trades** (MMT Ultra, the last 24 hours by default): the aggressive selling executed below a broken
+5. **Measured from trades** (MMT Ultra, the last 12 hours by default, trades of $1,000 or more): the aggressive selling executed below a broken
    support during the break (or buying above a broken resistance), its volume-weighted average fill, the share in
    prints of $100k or more, and **reclaim x**, the opposite aggression back on the reclaimed side from the reclaim
    through the successful hold divided by the pressed size (workshop 11's reclaim on volume). Pressed covers broken
    bars through the reclaim close; holding bars add only reclaim volume. A failed reclaim resets reclaim volume.
-   Venues: Binance, Bybit and OKX perps. All prints are loaded, and on every bar each
-   venue's buy and sell trade totals must be within 10% of its 5m candle (setting), or off by no more than 1% of the
-   pooled volume. MMT's trade feeds run slightly short of candle volume on some venues (Bybit about 95%), so an exact
-   match withheld trade readings on about half of all bars. A missing venue or side still fails. Each trap shows the
-   share of candle volume its trades covered ("trades 98% of vol"). Without covered trade data a trap falls back to
-   the break VWAP (HLC3 weighted by volume).
+   Venues: Binance, Bybit and OKX perps. The dollar minimum ("Count trades from", $1,000) is checked per trade at its
+   own price, so it is the same rule on every coin. MMT can only filter trades by size in coins, fixed before any
+   price is known, so to save memory BTC, ETH and SOL load only trades above the dollar minimum at a high price
+   (BTC $200k, ETH $5k, SOL $500: 0.005 BTC, 0.2 ETH, 2 SOL); other coins load every print. Coverage counts every
+   loaded trade: on every bar each venue's buy and sell totals must reach 80% of its 5m candle (setting) and not exceed
+   it by more than 2%, give or take 1% of the pooled volume. MMT's trade feeds run slightly short on some venues
+   (Bybit about 95%). A missing venue or side fails. Each trap shows the share of candle volume its trades covered
+   ("trades 98% of vol"). Without covered trade data a trap falls back to the break VWAP (HLC3 weighted by volume).
 6. **Flow proxies from candles and OI**: `+S = (dOI - D) / 2` and `+L = (dOI + D) / 2` cannot identify positions or
    participants. "Break flow proxy" sums the positive proxy over the break, including the reclaim bar; "Counterflow
    proxy" sums its opposite sign after the hold, in coins. Measured net flow since the hold is shown beside it.
@@ -94,9 +96,10 @@ side is described at the bottom right; every trap is in the script's "Recent tra
 - MMT keeps per-price volume snapshots for about the last 1,000 bars. The ladder, the reaction zones and the old wick
   markers only exist for that span.
 - Offside's trap detection looks back 5 days of 5m bars. Its 4h swing levels use about 50 days of 4h bars.
-- Offside's trade layer loads the last 24 hours of unfiltered trades from the selected perps: about 6 million on BTC,
-  which took about 6.5 minutes from a cold start in a visible tab (seconds once loaded). Lower "Trade history (hours)"
-  to load faster. A minimized or background tab loads far slower, and two MMT tabs on one workspace compete.
+- Offside's trade layer loads the last 12 hours of trades from the selected perps. All BTC prints over 24 hours (about
+  6 million) took about 6.5 minutes from a cold start and coincided with MMT's "script service is at its memory
+  limit" errors, hence the shorter default and the coin floors above. Lower "Trade history (hours)" to load faster.
+  A minimized or background tab loads far slower, and two MMT tabs on one workspace compete.
 
 ## Checks and backtests
 

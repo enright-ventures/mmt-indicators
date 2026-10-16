@@ -41,7 +41,7 @@ for (const match of state.matchAll(/^  (\w+) = (?:float|int|bool|time|string)\[\
 Object.assign(context, {
   useTrades: true, useChart: true, useAll: false, lsBn: true, lsBb: false, lsOk: false,
   step: 1, rowSize: 0, tfScale: 1, showTraps: true, pokePct: 0.03, holdBars: 3,
-  reclaimBars: 12, trackHours: 24, coin: 'coins', bigUsd: 100000, coverPct: 90,
+  reclaimBars: 12, trackHours: 24, coin: 'coins', bigUsd: 100000, coverPct: 80, minUsd: 0,
   prevC5: 101, lastTrap: new Map(),
   lvP: [100], lvSide: [1], lvExp: [999999], lvState: [0], lvName: ['support'],
   ...input.state,

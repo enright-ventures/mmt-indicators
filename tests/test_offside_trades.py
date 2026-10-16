@@ -191,3 +191,23 @@ def test_small_venue_noise_within_one_percent_of_pooled_volume_is_accepted(short
         bars.append(hold)
     event, = run(bars, {"useChart": False, "lsBb": True})["events"]
     assert event["tradeOk"] is ok
+
+
+@pytest.mark.parametrize("traded,ok", [(85, True), (75, False), (105, False)])
+def test_size_filtered_trades_must_cover_most_of_the_candle_without_exceeding_it(traded, ok):
+    # Trades below the size floor are not loaded, so the tape covers less than the candle.
+    first = bar(300, 101, [(99, traded, False)], low=98)
+    first["candle"]["sellVolume"] = 100
+    bars = [first] + [bar(t, 102, [(101, 1, True)]) for t in (600, 900, 1200)]
+    event, = run(bars)["events"]
+    assert event["tradeOk"] is ok
+
+
+def test_trades_below_the_dollar_minimum_count_for_coverage_only():
+    # $99 and $9,900 sells below the level; only the larger one is pressing at a $1,000 minimum.
+    first = bar(300, 101, [(99, 1, False), (99, 100, False)], low=98)
+    bars = [first] + [bar(t, 102, [(101, 20, True)]) for t in (600, 900, 1200)]
+    event, = run(bars, {"minUsd": 1000})["events"]
+    assert event["tradeOk"]
+    assert event["pressed"] == 100
+    assert event["cover"] == 1

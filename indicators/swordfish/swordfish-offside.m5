@@ -29,9 +29,10 @@ input (
   trackHours = input.int(24, title: "Stop tracking after hours", min: 1, max: 168, sameLine: true)
   input.section(title: "Trades (MMT Ultra)")
   useTrades = input.bool(true, title: "Measure the break from individual trades", description: "Needs MMT Ultra (historical trades in scripts). Without it, only trades since the script started are measured.")
-  tradeHours = input.int(24, title: "Trade history (hours)", min: 1, max: 168, description: "Traps older than this show proxies only. Longer history loads more trades: all prints are loaded to verify coverage against each venue's candle volume.")
+  tradeHours = input.int(12, title: "Trade history (hours)", min: 1, max: 168, description: "Traps older than this show proxies only. Longer history loads more trades and uses more of MMT's shared script memory: BTC is the busiest: millions of trades a day across three perps.")
+  minUsd = input.float(1000.0, title: "Count trades from ($)", min: 0.0, description: "Pressed, average fill, large share and reclaim count only trades of at least this size, at each trade's own price, so the rule is the same on every coin. Coverage counts every trade loaded.")
   bigUsd = input.float(100000.0, title: "Large print from ($)", min: 1000.0)
-  coverPct = input.float(90.0, title: "Trades must match each venue's candle volume within (%)", min: 50.0, max: 100.0, description: "Each selected venue's buy and sell trade totals must be within this share of its 5m candle volume. MMT's trade feeds run slightly short of candle volume on some venues (Bybit about 95%), so an exact match withholds most traps.")
+  coverPct = input.float(80.0, title: "Trades must cover at least (% of each venue's candle volume)", min: 50.0, max: 100.0, description: "Each selected venue's buy and sell trade totals must reach this share of its 5m candle volume (and not exceed it by more than 2%). BTC, ETH and SOL load only trades above a small floor (the dollar minimum at a high price), and MMT's trade feeds run slightly short on some venues (Bybit about 95%). 100 = exact match on unfiltered coins.")
   input.section(title: "Old wick markers")
   showWick = input.bool(false, title: "Trapped-wick markers (the earlier method)")
   wickMin = input.float(0.35, title: "Wick at least this share of the bar's range", min: 0.05, max: 0.95)
@@ -71,6 +72,11 @@ setup (
   reclaimBars = math.max(1, int(math.floor(float(reclaimMin) / 5.0)) ?? 12)
   anyVwap = useVwapW || useVwapM || useVwapQ || useVwapY
   tradeHist = useTrades ? time.hours(tradeHours) : time.seconds(0)
+  // load floor in coins, only to save memory on the busiest coins: the dollar minimum at a price ceiling well above
+  // today's (BTC $200k, ETH $5k, SOL $500), so no trade the dollar rule counts is dropped below those prices. MMT
+  // filters trades by size in coins only, fixed before any price is known. Other coins load every print.
+  ceiling = str.startsWith(context.symbol, "btc") ? 200000.0 : str.startsWith(context.symbol, "eth") ? 5000.0 : str.startsWith(context.symbol, "sol") ? 500.0 : 0.0
+  minTrade = ceiling > 0.0 && minUsd > 0.0 ? minUsd / ceiling : 0.0
   noHist = time.seconds(0)
   usePair = venue == "Binance + Bybit perps"
 )
@@ -91,10 +97,10 @@ data (
   oi5 = subscribe(data.oi, exchange: source, timeframe: 5m, history: 1500)
   liq5 = subscribe(data.stat, exchange: source, timeframe: 5m, history: 1500)
   // individual trades for the break measurements (history needs MMT Ultra)
-  tBn = subscribe(data.trades, exchange: "binancef", history: useTrades && (useAll || usePair) ? tradeHist : noHist)
-  tBb = subscribe(data.trades, exchange: "bybitf", history: useTrades && (useAll || usePair) ? tradeHist : noHist)
-  tOk = subscribe(data.trades, exchange: "okxf", history: useTrades && useAll ? tradeHist : noHist)
-  tCh = subscribe(data.trades, history: useTrades && useChart ? tradeHist : noHist)
+  tBn = subscribe(data.trades, exchange: "binancef", minSize: minTrade > 0.0 ? minTrade : null, history: useTrades && (useAll || usePair) ? tradeHist : noHist)
+  tBb = subscribe(data.trades, exchange: "bybitf", minSize: minTrade > 0.0 ? minTrade : null, history: useTrades && (useAll || usePair) ? tradeHist : noHist)
+  tOk = subscribe(data.trades, exchange: "okxf", minSize: minTrade > 0.0 ? minTrade : null, history: useTrades && useAll ? tradeHist : noHist)
+  tCh = subscribe(data.trades, minSize: minTrade > 0.0 ? minTrade : null, history: useTrades && useChart ? tradeHist : noHist)
   // levels: 4h swings and, when any VWAP level is on, the VWAPs (a year and a half of 4h candles)
   h4 = subscribe(data.ohlcv, timeframe: 4h, history: anyVwap ? 3300 : 300)
 )
@@ -419,6 +425,8 @@ fn onTrade(p: float, sz: float, buy: bool, tt: time, venueId: int) {
   }
   bLo = math.min(bLo, p)
   bHi = math.max(bHi, p)
+  // below the dollar minimum: counted for coverage only
+  if p * sz < minUsd { return }
   let row = int(math.floor((p - bBase) / bW)) ?? 0
   let pos = bPos.get(row) ?? -1
   if pos < 0 {
@@ -774,15 +782,17 @@ on h4.close {
   }
 }
 
-// Require both sides of each selected venue's unfiltered tape to match its aligned candle within the coverage
-// setting, or miss by no more than 1% of the pooled side (so a small venue's feed noise does not withhold the bar);
-// 100% means floating-point summation only (one part per million, or 1e-8 coins). A partial first bar, a missing
-// venue, or discarded late trades fail it. Matched volume is summed for the trap's coverage readout.
+// Both sides of each selected venue's trades must reach the coverage share of its aligned candle (trades below the
+// size floor are not loaded) and not exceed it by more than 2%, give or take 1% of the pooled side (so a small venue's
+// feed noise does not withhold the bar); 100% means an exact match (one part per million, or 1e-8 coins). A partial
+// first bar, a missing venue, or discarded late trades fail it. Matched volume is summed for the coverage readout.
 fn volumeMatches(actual: float, expected: float?, pooled: float) -> bool {
   if expected == null { return false }
-  let tol = math.max(1.0 - coverPct / 100.0, 0.000001)
-  let slack = coverPct >= 100.0 ? 0.0 : pooled * 0.01
-  return math.isFinite(expected) && expected >= 0.0 && math.abs(actual - expected) <= math.max(0.00000001, math.max(math.abs(expected) * tol, slack))
+  if !math.isFinite(expected) || expected < 0.0 { return false }
+  let exact = math.max(0.00000001, math.abs(expected) * 0.000001)
+  if coverPct >= 100.0 { return math.abs(actual - expected) <= exact }
+  let slack = pooled * 0.01
+  return actual >= expected * coverPct / 100.0 - slack - exact && actual <= expected * 1.02 + slack + exact
 }
 
 fn venueCovered(i: int, bv: float?, sv: float?) -> bool {

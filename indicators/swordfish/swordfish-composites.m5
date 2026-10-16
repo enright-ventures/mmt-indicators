@@ -34,6 +34,7 @@ input (
   priceLabels = input.bool(true, title: "Price labels on extended levels (right edge)")
   labelSpacing = input.float(0.3, title: "Minimum label spacing (% of price)", min: 0.0, max: 5.0, description: "Labels closer than this to a newer composite's label are skipped.")
   fillStrength = input.int(16, title: "Value-area shading (% opacity, newest)", min: 0, max: 60)
+  oldestStrength = input.int(25, title: "Oldest composite drawn at (% of newest)", min: 5, max: 100, description: "Boxes, distributions, levels and rays fade from the newest composite (full strength) back to the oldest one drawn. 100 = no fade.")
 )
 
 type Candle {
@@ -455,6 +456,10 @@ fn priceText(v: float) -> string {
 fn price(row: int) -> float {
   return float(row) * rowPrice
 }
+// Opacity scaled by recency: 1 for the newest composite drawn, down to the oldest-strength setting for the oldest.
+fn faded(alpha: float, strength: float) -> int {
+  return int(math.max(6.0, math.min(255.0, alpha * strength))) ?? 6
+}
 fn drawAll() {
   zones.clear("z")
   shapes.clear("s")
@@ -465,29 +470,49 @@ fn drawAll() {
   let barSpan = time.nominalDuration(context.timeframe)
   let projectEnd = now + time.seconds(time.durationSeconds(barSpan) * 12)
   let shown = done.len - drawStart
+  // the ages (seconds since each composite ended) of the newest and oldest composites drawn, for the recency fade
+  let youngest = 0.0
+  let oldest = 0.0
+  let haveAges = false
+  for k in drawStart..done.len {
+    let p = done[k]
+    if p != null {
+      let a = float(time.durationSeconds(now - p.end))
+      if !haveAges {
+        youngest = a
+        oldest = a
+        haveAges = true
+      }
+      youngest = math.min(youngest, a)
+      oldest = math.max(oldest, a)
+    }
+  }
+  let spanAges = oldest - youngest
   if fault == "" {
     for k in drawStart..done.len {
       let p = done[k]
       if p != null {
         let age = math.max(0.0, float(time.durationSeconds(now - p.end)) / 86400.0)
         let fraction = math.min(1.0, age / float(rayDays))
+        let older = spanAges > 0.0 ? (float(time.durationSeconds(now - p.end)) - youngest) / spanAges : 0.0
+        let strength = 1.0 - (1.0 - float(oldestStrength) / 100.0) * older
         let shade = palette.sample(fraction)
         let vah = price(p.vah)
         let poc = price(p.poc)
         let val = price(p.val)
         let recent = age <= float(rayDays) && k >= done.len - rayCount
-        let zoneAlpha = int(255.0 * float(fillStrength) * (1.0 - 0.5 * fraction) / 100.0) ?? 20
+        let zoneAlpha = faded(255.0 * float(fillStrength) * (1.0 - 0.5 * fraction) / 100.0, strength)
         let dated = captions == "All" || (captions == "Recent two" && k >= done.len - 2)
-        zones.get("z", k).set(p.start, vah, p.end, val, color: color.withAlpha(shade, zoneAlpha), borderWidth: 1, borderColor: color.withAlpha(shade, int(230.0 - 100.0 * fraction) ?? 160), text: dated ? caption(p) : "", textColor: shade, textSize: 12, textHAlign: "right", textVAlign: "top", textWrap: false)
+        zones.get("z", k).set(p.start, vah, p.end, val, color: color.withAlpha(shade, zoneAlpha), borderWidth: 1, borderColor: color.withAlpha(shade, faded(230.0 - 100.0 * fraction, strength)), text: dated ? caption(p) : "", textColor: color.withAlpha(shade, faded(255.0, math.max(strength, 0.6))), textSize: 12, textHAlign: "right", textVAlign: "top", textWrap: false)
         if projectedFill && rayMode == "All levels" && recent && p.vah > p.val {
-          zones.get("z", "f", k).set(p.end, vah, projectEnd, val, color: color.withAlpha(shade, int(255.0 * (6.0 - 3.0 * fraction) / 100.0) ?? 8), borderWidth: 0)
+          zones.get("z", "f", k).set(p.end, vah, projectEnd, val, color: color.withAlpha(shade, faded(255.0 * (6.0 - 3.0 * fraction) / 100.0, strength)), borderWidth: 0)
         }
         for n in 0..3 {
           let level = n == 0 ? vah : n == 1 ? poc : val
           let style = n == 1 ? linestyle.dotted : linestyle.solid
-          levelLines.get("l", k, n).set(p.start, level, p.end, level, width: n == 1 ? 2.0 : 1.0, color: shade, style: style, zIndex: 3)
+          levelLines.get("l", k, n).set(p.start, level, p.end, level, width: n == 1 ? 2.0 : 1.0, color: color.withAlpha(shade, faded(255.0, strength)), style: style, zIndex: 3)
           if rayMode != "None" && (rayMode == "All levels" || n == 1) && recent {
-            let rayInk = color.withAlpha(shade, int(255.0 * (65.0 - 45.0 * fraction) / 100.0) ?? 50)
+            let rayInk = color.withAlpha(shade, faded(255.0 * (65.0 - 45.0 * fraction) / 100.0, strength))
             levelLines.get("l", "r", k, n).set(p.end, level, now, level, width: 1.0, color: rayInk, style: style, extend: extend.right, zIndex: 1)
           }
         }
@@ -516,7 +541,7 @@ fn drawAll() {
             if total > 0 {
               let ink = r <= p.poc && p.poc < r + stride ? pocInk : shade
               let right = p.start + time.seconds(int(width * float(total) / float(maximum)) ?? 1)
-              shapes.get("s", k, g).set(p.start, price(math.min(r + stride, p.hi + 1)), right, price(r), color: color.withAlpha(ink, 82), borderWidth: 0, zIndex: 1)
+              shapes.get("s", k, g).set(p.start, price(math.min(r + stride, p.hi + 1)), right, price(r), color: color.withAlpha(ink, faded(82.0, strength)), borderWidth: 0, zIndex: 1)
             }
           }
         }
