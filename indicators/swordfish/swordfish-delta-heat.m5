@@ -10,11 +10,13 @@ script "Swordfish Delta Heat"
 // live bar is built from the completed one-minute snapshots since it opened (exact per row, at most a minute behind,
 // from any load time) and redrawn as each minute closes; when the bar closes, its own snapshot replaces that. (No live
 // trade tapes: they count against MMT's live-feed limit.)
+// When the auto row size changes, every bar with a snapshot is redrawn at the new size, so all ladders on screen share
+// one row height, and the colour scale is rebuilt from their largest rows at that size.
 // Live reconstruction is limited to whole-minute chart timeframes from 1m through 4h.
 
 input (
   input.section(title: "Rows")
-  rowSize = input.float(0.0, title: "Row size in price (0 = auto)", min: 0.0, description: "Auto: the average range of the last 100 bars divided by Rows per typical bar, on a 1/2/2.5/5 grid and never below the tick size. It changes only when that range doubles or halves. BTC 30m gives $50; high-volatility alts get proportionally bigger rows. Bigger rows leave more room for the numbers.")
+  rowSize = input.float(0.0, title: "Row size in price (0 = auto)", min: 0.0, description: "Auto: the average range of the last 100 bars divided by Rows per typical bar, on a 1/2/2.5/5 grid and never below the tick size. It changes only when that range doubles or halves, and then every kept bar is redrawn at the new size. BTC 30m gives $50; high-volatility alts get proportionally bigger rows. Bigger rows leave more room for the numbers.")
   rowsPerBar = input.int(10, title: "Rows per typical bar (auto row size)", min: 3, max: 40)
   venue = input.select("Perps: Binance, Bybit, OKX", title: "Volume from", options: ["Chart venue", "Binance + Bybit perps", "Perps: Binance, Bybit, OKX"])
   input.section(title: "Look")
@@ -49,6 +51,8 @@ state (
   ranges = rolling<float>(100)
   step: float = 0.0
   lastDrawn: time? = null
+  // each kept bar's largest row at the current row size, newest first, for rebuilding the colour scale on a resize
+  resized = float[](1000)
 )
 
 // 1, 2, 2.5 or 5 times a power of ten, nearest above the target.
@@ -133,6 +137,37 @@ on clock.close {
   }
 }
 
+// One closed bar's ladder from its snapshot `back` bars ago, at the current row size, against the colour reference.
+// Returns the bar's largest row in dollars, or -1 when there is no snapshot.
+fn drawSnapshot(back: int, ref: float, draw: bool) -> float {
+  let b = vol.bucketsByStep(step, barsAgo: back)
+  if b == null { return -1.0 }
+  let biggest = 0.0
+  let strongest = -1
+  for i in 0..b.len {
+    let c = b.get(i)
+    if c != null && c.total > 0.0 {
+      let usd = c.delta * (c.from + c.to) / 2.0
+      if math.abs(usd) > biggest {
+        biggest = math.abs(usd)
+        strongest = i
+      }
+    }
+  }
+  if draw {
+    let at = b.time
+    ladder.clear(time: at)
+    for i in 0..b.len {
+      let c = b.get(i)
+      if c != null && c.total > 0.0 {
+        row(c.from, c.to, c.delta * (c.from + c.to) / 2.0, ref, biggest, i == strongest, at)
+      }
+    }
+    if back == 0 { lastDrawn = at }
+  }
+  return biggest
+}
+
 // Closed bars: the volume snapshot, once per bar.
 on chart.update {
   if chart.isLast {
@@ -151,10 +186,26 @@ on chart.close {
     let avgRange = ranges.avg() ?? 0.0
     let tick = markets.tickSize(context.exchange, context.symbol) ?? 0.0
     let auto = math.max(ranges.len >= 20 && avgRange > 0.0 ? niceStep(avgRange / float(rowsPerBar)) : niceStep(price * 0.0006 * tfScale), tick)
+    let before = step
     if rowSize > 0.0 {
       step = rowSize
     } else if step <= 0.0 || auto >= step * 2.0 || auto <= step / 2.0 {
       step = auto
+    }
+    // a new row size: redraw every kept bar at it, so no ladder keeps the old row height
+    if before > 0.0 && step != before {
+      resized.clear()
+      let more = true
+      for back in 0..1000 {
+        if more {
+          let biggest = drawSnapshot(back, 1.0, false)
+          if biggest < 0.0 { more = false } else { resized.push(biggest) }
+        }
+      }
+      peaks.clear()
+      for j in 0..resized.len { peaks.push(resized[resized.len - 1 - j] ?? 0.0) }
+      let ref = math.max(peaks.avg() ?? 0.0, 0.000000001)
+      for back in 0..resized.len { drawSnapshot(back, ref, true) }
     }
   }
   if step > 0.0 {
