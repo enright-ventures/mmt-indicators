@@ -94,7 +94,27 @@ window details = window(title: cadence + " composites") {
     table.col(title: "VAL", align: align.right),
   ], title: "Composites", capacity: 40),
   status: table.new([table.col(title: "Data"), table.col(title: "Details", width: 3.0)], title: "Calculation", capacity: 12),
+  // Agent export: the newest two composites as hidden series for script_get_plot_values (live bar included).
+  // Times are minutes since 2026-01-01 00:00 UTC (plot values travel as 32-bit floats).
+  export: chart.panel(chart),
 }
+
+plot (
+  xC0Vah = plot.line(title: "x." + unit + ".c0.vah", on: details.export)
+  xC0Poc = plot.line(title: "x." + unit + ".c0.poc", on: details.export)
+  xC0Val = plot.line(title: "x." + unit + ".c0.val", on: details.export)
+  xC0Start = plot.line(title: "x." + unit + ".c0.start_min", on: details.export)
+  xC0End = plot.line(title: "x." + unit + ".c0.end_min", on: details.export)
+  xC0Members = plot.line(title: "x." + unit + ".c0.members", on: details.export)
+  xC1Vah = plot.line(title: "x." + unit + ".c1.vah", on: details.export)
+  xC1Poc = plot.line(title: "x." + unit + ".c1.poc", on: details.export)
+  xC1Val = plot.line(title: "x." + unit + ".c1.val", on: details.export)
+  xC1Start = plot.line(title: "x." + unit + ".c1.start_min", on: details.export)
+  xC1End = plot.line(title: "x." + unit + ".c1.end_min", on: details.export)
+  xC1Members = plot.line(title: "x." + unit + ".c1.members", on: details.export)
+  xClosed = plot.line(title: "x." + unit + ".closed_periods", on: details.export)
+  xOk = plot.line(title: "x." + unit + ".ok", on: details.export)
+)
 
 state (
   ring = rolling<Candle>(ringSize)
@@ -594,7 +614,12 @@ fn drawAll() {
   details.status.row("3", "Window", from != null ? str.format("from {0} UTC ({1})", time.format(from, "{DD}/{MM}/{YYYY}"), mode) : "waiting")
   details.status.row("4", "Periods", str.format("{0} closed | {1} incomplete | {2} gaps | {3} bars", closed, skipped, gaps, rowsUsed))
   details.status.row("5", "Status", note != "" ? note : str.format("{0} composites drawn", shown))
-  script.setTitle(str.format("Swordfish Composites | {0} | row {1} | {2} {3} | {4} closed{5}", cadence, rowPrice, mode, from != null ? dateLabel(from) : "-", closed, note != "" ? " | " + note : ""))
+  // the newest two composites in the title too, so every layer (Daily and Weekly) can be read from chart_get_layers
+  let t0 = done.len > drawStart && fault == "" ? done[done.len - 1] : null
+  let t1 = done.len - 2 >= drawStart && fault == "" ? done[done.len - 2] : null
+  let lv0 = t0 != null ? str.format(" | new {0} VAH {1} POC {2} VAL {3}", caption(t0), priceText(price(t0.vah)), priceText(price(t0.poc)), priceText(price(t0.val))) : ""
+  let lv1 = t1 != null ? str.format(" | prior {0} VAH {1} POC {2} VAL {3}", caption(t1), priceText(price(t1.vah)), priceText(price(t1.poc)), priceText(price(t1.val))) : ""
+  script.setTitle(str.format("Swordfish Composites | {0} | row {1} | {2} {3} | {4} closed{5}{6}{7}", cadence, rowPrice, mode, from != null ? dateLabel(from) : "-", closed, note != "" ? " | " + note : "", lv0, lv1))
 }
 
 // ---------------------------------------------------------------- handlers
@@ -612,6 +637,9 @@ on m30.close {
     }
   }
 }
+fn exportMin(t: time) -> float {
+  return float(time.unixSeconds(t) ?? 0) / 60.0 - 29453760.0
+}
 // Composites change only when a UTC day closes, so they are rebuilt once per closed day, on the live bar.
 on chart.update {
   let newest = lastT
@@ -623,4 +651,22 @@ on chart.update {
       builtDay = day
     }
   }
+  // agent export, every update once the composites are built (live bar included)
+  let ok = builtDay >= 0 && fault == "" && done.len > drawStart
+  let p0 = ok ? done[done.len - 1] : null
+  let p1 = ok && done.len - 2 >= drawStart ? done[done.len - 2] : null
+  xC0Vah.plot(p0 != null ? price(p0.vah) : null)
+  xC0Poc.plot(p0 != null ? price(p0.poc) : null)
+  xC0Val.plot(p0 != null ? price(p0.val) : null)
+  xC0Start.plot(p0 != null ? exportMin(p0.start) : null)
+  xC0End.plot(p0 != null ? exportMin(p0.end) : null)
+  xC0Members.plot(p0 != null ? float(p0.members) : null)
+  xC1Vah.plot(p1 != null ? price(p1.vah) : null)
+  xC1Poc.plot(p1 != null ? price(p1.poc) : null)
+  xC1Val.plot(p1 != null ? price(p1.val) : null)
+  xC1Start.plot(p1 != null ? exportMin(p1.start) : null)
+  xC1End.plot(p1 != null ? exportMin(p1.end) : null)
+  xC1Members.plot(p1 != null ? float(p1.members) : null)
+  xClosed.plot(builtDay >= 0 ? float(closed) : null)
+  xOk.plot(builtDay >= 0 ? (fault == "" ? 1.0 : 0.0) : null)
 }

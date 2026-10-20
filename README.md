@@ -101,6 +101,26 @@ side is described at the bottom right; every trap is in the script's "Recent tra
   limit" errors, hence the shorter default and the coin floors above. Lower "Trade history (hours)" to load faster.
   A minimized or background tab loads far slower, and two MMT tabs on one workspace compete.
 
+## Agent exports (m5)
+
+Composites, Calendar VWAP and Offside also plot hidden numeric series, all titled `x.*`, on a panel inside their own
+details window. An agent can read them with m5 `script_get_plot_values` instead of reading the canvas. They draw
+nothing on the chart, and they are plotted from the update handler, so the live bar is included.
+
+- Composites: `x.<unit>.c0.*` and `x.<unit>.c1.*` (the newest and prior composite): `vah`, `poc`, `val`,
+  `start_min`, `end_min`, `members`. Also `x.<unit>.closed_periods` and `x.<unit>.ok`. The layer title also carries the
+  newest and prior VAH/POC/VAL, because `script_get_plot_values` only returns the first layer of a script that is on the
+  chart twice (Daily and Weekly).
+- Calendar VWAP: `x.{W,M,Q,Y}.vwap` and `.sd` for the current period, and `x.{pW,pM,pQ,pY}.*` for the prior one.
+- Offside: `x.trap_longs.*` and `x.trap_shorts.*` (level, stop, status, reclaim_x, flows, trade coverage),
+  `x.active.*` (the level being tracked), `x.watch.*`, `x.zone_above.*` and `x.zone_below.*`, divergences
+  (`x.div_bull.*`, `x.div_bear.*`), the current bar's flow (`x.bar.*`: buy and sell volume, delta, liquidations, the
+  +L and +S proxies, OI), and the Delta Heat ladder summary (`x.heat.*`).
+
+Times (`*_min`) are minutes since 2026-01-01 00:00 UTC. Plot values travel as 32-bit floats, so prices keep about
+7 significant digits. Bar Stats and Delta Heat have no exports: adding a window to them opened it as a chart tab and
+stalled Offside, so Offside reports those numbers instead.
+
 ## Checks and backtests
 
 Everything was checked against exchange data before use (details in [`validation/README.md`](validation/README.md)):

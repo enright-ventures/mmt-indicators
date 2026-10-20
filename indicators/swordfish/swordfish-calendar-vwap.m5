@@ -106,7 +106,29 @@ window details = window(title: "Calendar VWAP levels") {
     table.col(title: "VAL (-1 SD)", align: align.right),
     table.col(title: "Status", width: 1.2),
   ], title: "Periods", capacity: 80),
+  // Agent export: current and previous W/M/Q/Y VWAP and SD (VAH = vwap + sd, VAL = vwap - sd) as hidden series for
+  // script_get_plot_values, live bar included. Null when a period is incomplete or withheld.
+  export: chart.panel(chart),
 }
+
+plot (
+  xWVwap = plot.line(title: "x.W.vwap", on: details.export)
+  xWSd = plot.line(title: "x.W.sd", on: details.export)
+  xPWVwap = plot.line(title: "x.pW.vwap", on: details.export)
+  xPWSd = plot.line(title: "x.pW.sd", on: details.export)
+  xMVwap = plot.line(title: "x.M.vwap", on: details.export)
+  xMSd = plot.line(title: "x.M.sd", on: details.export)
+  xPMVwap = plot.line(title: "x.pM.vwap", on: details.export)
+  xPMSd = plot.line(title: "x.pM.sd", on: details.export)
+  xQVwap = plot.line(title: "x.Q.vwap", on: details.export)
+  xQSd = plot.line(title: "x.Q.sd", on: details.export)
+  xPQVwap = plot.line(title: "x.pQ.vwap", on: details.export)
+  xPQSd = plot.line(title: "x.pQ.sd", on: details.export)
+  xYVwap = plot.line(title: "x.Y.vwap", on: details.export)
+  xYSd = plot.line(title: "x.Y.sd", on: details.export)
+  xPYVwap = plot.line(title: "x.pY.vwap", on: details.export)
+  xPYSd = plot.line(title: "x.pY.sd", on: details.export)
+)
 
 // ---------------------------------------------------------------- calendar units: 0 Weekly, 1 Monthly, 2 Quarterly, 3 Yearly
 fn unitTf(u: int) -> timeframe {
@@ -432,6 +454,37 @@ on chart.update {
     devDn.plot(live && bands ? s.mean - s.sigma : null)
     let fillInk = live && bands && bandFill ? color.rgb(239, 158, 105, 14) : color.rgb(0, 0, 0, 0)
     devFill.fill(color: fillInk)
+    // agent export (live edge only): every unit, current and previous period
+    if chart.isLast {
+      let x0 = time.floor(t, unitTf(0))
+      let x1 = time.floor(t, unitTf(1))
+      let x2 = time.floor(t, unitTf(2))
+      let x3 = time.floor(t, unitTf(3))
+      let c0 = currentStat(0, x0)
+      let q0 = completedStat(0, time.shiftBars(x0, -1, tf: unitTf(0)))
+      let c1 = currentStat(1, x1)
+      let q1 = completedStat(1, time.shiftBars(x1, -1, tf: unitTf(1)))
+      let c2 = currentStat(2, x2)
+      let q2 = completedStat(2, time.shiftBars(x2, -1, tf: unitTf(2)))
+      let c3 = currentStat(3, x3)
+      let q3 = completedStat(3, time.shiftBars(x3, -1, tf: unitTf(3)))
+      xWVwap.plot(c0.ok ? c0.mean : null)
+      xWSd.plot(c0.ok ? c0.sigma : null)
+      xPWVwap.plot(q0.ok ? q0.mean : null)
+      xPWSd.plot(q0.ok ? q0.sigma : null)
+      xMVwap.plot(c1.ok ? c1.mean : null)
+      xMSd.plot(c1.ok ? c1.sigma : null)
+      xPMVwap.plot(q1.ok ? q1.mean : null)
+      xPMSd.plot(q1.ok ? q1.sigma : null)
+      xQVwap.plot(c2.ok ? c2.mean : null)
+      xQSd.plot(c2.ok ? c2.sigma : null)
+      xPQVwap.plot(q2.ok ? q2.mean : null)
+      xPQSd.plot(q2.ok ? q2.sigma : null)
+      xYVwap.plot(c3.ok ? c3.mean : null)
+      xYSd.plot(c3.ok ? c3.sigma : null)
+      xPYVwap.plot(q3.ok ? q3.mean : null)
+      xPYSd.plot(q3.ok ? q3.sigma : null)
+    }
     if chart.isLast {
       if closes != drawnAt {
         drawStatic(t)

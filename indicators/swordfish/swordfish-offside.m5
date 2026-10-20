@@ -96,6 +96,8 @@ data (
   ok5 = subscribe(data.ohlcv, exchange: "okxf", timeframe: 5m, history: 1500)
   oi5 = subscribe(data.oi, exchange: source, timeframe: 5m, history: 1500)
   liq5 = subscribe(data.stat, exchange: source, timeframe: 5m, history: 1500)
+  // the chart timeframe's liquidations, for the agent export only
+  liqC = subscribe(data.stat, exchange: source)
   // individual trades for the break measurements (history needs MMT Ultra)
   tBn = subscribe(data.trades, exchange: "binancef", minSize: minTrade > 0.0 ? minTrade : null, history: useTrades && (useAll || usePair) ? tradeHist : noHist)
   tBb = subscribe(data.trades, exchange: "bybitf", minSize: minTrade > 0.0 ? minTrade : null, history: useTrades && (useAll || usePair) ? tradeHist : noHist)
@@ -122,7 +124,83 @@ window traps = window(title: "Recent traps") {
     table.col(title: "Net flow since", align: align.right),
     table.col(title: "Status", width: 1.3),
   ], title: "Traps", capacity: 60),
+  // Agent export: the newest trap per side, the level being traded through, the nearest watched levels and live
+  // reaction zones, and the latest delta divergences, as hidden series for script_get_plot_values (live bar
+  // included). Times are minutes since 2026-01-01 00:00 UTC. status: 1 holding, 0 ended, -1 failed. active.state:
+  // 1 broken (waiting for a reclaim), 2 reclaimed and holding; dir: -1 broke down, +1 broke up.
+  export: chart.panel(chart),
 }
+
+plot (
+  xLMin = plot.line(title: "x.trap_longs.min", on: traps.export)
+  xLLevel = plot.line(title: "x.trap_longs.level", on: traps.export)
+  xLStop = plot.line(title: "x.trap_longs.stop", on: traps.export)
+  xLAvgFill = plot.line(title: "x.trap_longs.avg_fill", on: traps.export)
+  xLPressed = plot.line(title: "x.trap_longs.pressed", on: traps.export)
+  xLLargeShare = plot.line(title: "x.trap_longs.large_share", on: traps.export)
+  xLReclaimX = plot.line(title: "x.trap_longs.reclaim_x", on: traps.export)
+  xLTradeCover = plot.line(title: "x.trap_longs.trade_cover", on: traps.export)
+  xLStoppedOut = plot.line(title: "x.trap_longs.stopped_out", on: traps.export)
+  xLBreakFlow = plot.line(title: "x.trap_longs.break_flow", on: traps.export)
+  xLCounterflow = plot.line(title: "x.trap_longs.counterflow", on: traps.export)
+  xLNetFlow = plot.line(title: "x.trap_longs.net_flow", on: traps.export)
+  xLStatus = plot.line(title: "x.trap_longs.status", on: traps.export)
+  xLTradeOk = plot.line(title: "x.trap_longs.trade_ok", on: traps.export)
+  xLWick = plot.line(title: "x.trap_longs.wick", on: traps.export)
+  xLBreakMin = plot.line(title: "x.trap_longs.break_min", on: traps.export)
+  xSMin = plot.line(title: "x.trap_shorts.min", on: traps.export)
+  xSLevel = plot.line(title: "x.trap_shorts.level", on: traps.export)
+  xSStop = plot.line(title: "x.trap_shorts.stop", on: traps.export)
+  xSAvgFill = plot.line(title: "x.trap_shorts.avg_fill", on: traps.export)
+  xSPressed = plot.line(title: "x.trap_shorts.pressed", on: traps.export)
+  xSLargeShare = plot.line(title: "x.trap_shorts.large_share", on: traps.export)
+  xSReclaimX = plot.line(title: "x.trap_shorts.reclaim_x", on: traps.export)
+  xSTradeCover = plot.line(title: "x.trap_shorts.trade_cover", on: traps.export)
+  xSStoppedOut = plot.line(title: "x.trap_shorts.stopped_out", on: traps.export)
+  xSBreakFlow = plot.line(title: "x.trap_shorts.break_flow", on: traps.export)
+  xSCounterflow = plot.line(title: "x.trap_shorts.counterflow", on: traps.export)
+  xSNetFlow = plot.line(title: "x.trap_shorts.net_flow", on: traps.export)
+  xSStatus = plot.line(title: "x.trap_shorts.status", on: traps.export)
+  xSTradeOk = plot.line(title: "x.trap_shorts.trade_ok", on: traps.export)
+  xSWick = plot.line(title: "x.trap_shorts.wick", on: traps.export)
+  xSBreakMin = plot.line(title: "x.trap_shorts.break_min", on: traps.export)
+  xActPrice = plot.line(title: "x.active.level", on: traps.export)
+  xActDir = plot.line(title: "x.active.dir", on: traps.export)
+  xActFlush = plot.line(title: "x.active.flush", on: traps.export)
+  xActState = plot.line(title: "x.active.state", on: traps.export)
+  xActHeld = plot.line(title: "x.active.held_bars", on: traps.export)
+  xActBars = plot.line(title: "x.active.bars_since_break", on: traps.export)
+  xActFrom = plot.line(title: "x.active.break_min", on: traps.export)
+  xWatchAbove = plot.line(title: "x.watch.above", on: traps.export)
+  xWatchBelow = plot.line(title: "x.watch.below", on: traps.export)
+  xWatchCount = plot.line(title: "x.watch.count", on: traps.export)
+  xZoneAboveLo = plot.line(title: "x.zone_above.lo", on: traps.export)
+  xZoneAboveHi = plot.line(title: "x.zone_above.hi", on: traps.export)
+  xZoneAboveSign = plot.line(title: "x.zone_above.sign", on: traps.export)
+  xZoneBelowLo = plot.line(title: "x.zone_below.lo", on: traps.export)
+  xZoneBelowHi = plot.line(title: "x.zone_below.hi", on: traps.export)
+  xZoneBelowSign = plot.line(title: "x.zone_below.sign", on: traps.export)
+  xDivBearMin = plot.line(title: "x.div_bear.min", on: traps.export)
+  xDivBearPrice = plot.line(title: "x.div_bear.price", on: traps.export)
+  xDivBullMin = plot.line(title: "x.div_bull.min", on: traps.export)
+  xDivBullPrice = plot.line(title: "x.div_bull.price", on: traps.export)
+  xBarLongLiq = plot.line(title: "x.bar.long_liq", on: traps.export)
+  xBarShortLiq = plot.line(title: "x.bar.short_liq", on: traps.export)
+  xBarPlusL = plot.line(title: "x.bar.plus_l_proxy", on: traps.export)
+  xBarPlusS = plot.line(title: "x.bar.plus_s_proxy", on: traps.export)
+  xBarBuy = plot.line(title: "x.bar.buy_vol", on: traps.export)
+  xBarSell = plot.line(title: "x.bar.sell_vol", on: traps.export)
+  xBarDelta = plot.line(title: "x.bar.delta", on: traps.export)
+  xBarOi = plot.line(title: "x.bar.oi_close", on: traps.export)
+  xBarDOi = plot.line(title: "x.bar.oi_change", on: traps.export)
+  xHeatBar = plot.line(title: "x.heat.bar_min", on: traps.export)
+  xHeatMaxPrice = plot.line(title: "x.heat.max_row_price", on: traps.export)
+  xHeatMaxUsd = plot.line(title: "x.heat.max_row_usd", on: traps.export)
+  xHeatNetUsd = plot.line(title: "x.heat.net_usd", on: traps.export)
+  xHeatUpperWickUsd = plot.line(title: "x.heat.above_body_usd", on: traps.export)
+  xHeatLowerWickUsd = plot.line(title: "x.heat.below_body_usd", on: traps.export)
+  xHeatTypical = plot.line(title: "x.heat.typical_max_usd", on: traps.export)
+)
 
 plot (
   longLine = plot.line(title: "+L flow-weighted price", color: longColor, width: 1.5, style: linestyle.dotted, showLabel: false)
@@ -278,6 +356,10 @@ state (
   mBuyBig = float[](120)
   recentPressed = rolling<float>(20)
   fNext: int = 0
+  divBearT: float = 0.0
+  divBearP: float = 0.0
+  divBullT: float = 0.0
+  divBullP: float = 0.0
   painLines = entities.linePool(max: 40)
   levelLines = entities.linePool(max: 40)
 )
@@ -1076,6 +1158,9 @@ on chart.close {
       let lowSellUsd = 0.0
       let lowSellCoins = 0.0
       let net = 0.0
+      let netUsd = 0.0
+      let maxPrice = 0.0
+      let maxUsd = 0.0
       let runLo = 0.0
       let runHi = 0.0
       let runSign = 0.0
@@ -1086,6 +1171,11 @@ on chart.close {
         let usd = r != null ? r.delta * mid : 0.0
         if r != null {
           net += r.delta
+          netUsd += usd
+          if math.abs(usd) > biggest {
+            maxPrice = mid
+            maxUsd = usd
+          }
           biggest = math.max(biggest, math.abs(usd))
           if mid > bodyTop {
             upUsd += usd
@@ -1121,6 +1211,15 @@ on chart.close {
       }
       if runSign != 0.0 && showZones { addZone(runLo, runHi, runSign, t) }
       peaks.push(biggest)
+      // agent export: this closed bar's delta rows (written on close, so they sit on the next bar; heat.bar_min
+      // names the bar they describe)
+      xHeatBar.plot(unix(t) / 60.0 - 29453760.0)
+      xHeatMaxPrice.plot(biggest > 0.0 ? maxPrice : null)
+      xHeatMaxUsd.plot(biggest > 0.0 ? maxUsd : null)
+      xHeatNetUsd.plot(netUsd)
+      xHeatUpperWickUsd.plot(upUsd)
+      xHeatLowerWickUsd.plot(lowUsd)
+      xHeatTypical.plot(ref)
 
       // divergence against the lookback's extreme
       cvd += net
@@ -1139,11 +1238,15 @@ on chart.close {
           if i <= n - 3 && hi == topHigh && h > topHigh && cvd < then {
             if !bearDiv { nDiv += 1 }
             bearDiv = true
+            divBearT = unix(t)
+            divBearP = h
             if showDiv { divLines.get("b", t).set(at, hi, t, h, width: 1.5, color: sellColor, style: linestyle.dashed) }
           }
           if i <= n - 3 && lo == lowLow && l < lowLow && cvd > then {
             if !bullDiv { nDiv += 1 }
             bullDiv = true
+            divBullT = unix(t)
+            divBullP = l
             if showDiv { divLines.get("s", t).set(at, lo, t, l, width: 1.5, color: buyColor, style: linestyle.dashed) }
           }
         }
@@ -1168,9 +1271,130 @@ on chart.close {
   }
 }
 
+fn xMin(t: time?) -> float? {
+  return t != null ? unix(t) / 60.0 - 29453760.0 : null
+}
+fn xMinU(u: float) -> float? {
+  return u > 0.0 ? u / 60.0 - 29453760.0 : null
+}
+// One side's newest trap into the export series (k < 0: none).
+fn exportTrapL(k: int) {
+  let has = k >= 0
+  let pressed = has ? fPressed[k] ?? 0.0 : 0.0
+  let tradeOk = has ? fTradeOk[k] ?? false : false
+  let st = has ? fStatus[k] ?? "" : ""
+  xLMin.plot(has ? xMin(fTime[k]) : null)
+  xLLevel.plot(has ? fLvl[k] : null)
+  xLStop.plot(has ? fExt[k] : null)
+  xLAvgFill.plot(has ? fFill[k] : null)
+  xLPressed.plot(has && tradeOk ? pressed : null)
+  xLLargeShare.plot(has && tradeOk && pressed > 0.0 ? (fBig[k] ?? 0.0) / pressed : null)
+  xLReclaimX.plot(has && tradeOk && pressed > 0.0 ? (fBack[k] ?? 0.0) / pressed : null)
+  xLTradeCover.plot(has && tradeOk ? fCover[k] : null)
+  xLStoppedOut.plot(has ? fStopped[k] : null)
+  xLBreakFlow.plot(has && (fFlowOk[k] ?? false) ? fQty[k] : null)
+  xLCounterflow.plot(has && (fCounterOk[k] ?? false) && (fFlowOk[k] ?? false) ? fDone[k] : null)
+  xLNetFlow.plot(has && (fCounterOk[k] ?? false) ? fNet[k] : null)
+  xLStatus.plot(has ? ((fLive[k] ?? false) ? 1.0 : str.startsWith(st, "failed") ? -1.0 : 0.0) : null)
+  xLTradeOk.plot(has ? (tradeOk ? 1.0 : 0.0) : null)
+  xLWick.plot(has ? ((fWick[k] ?? false) ? 1.0 : 0.0) : null)
+  xLBreakMin.plot(has ? xMin(fFrom[k]) : null)
+}
+fn exportTrapS(k: int) {
+  let has = k >= 0
+  let pressed = has ? fPressed[k] ?? 0.0 : 0.0
+  let tradeOk = has ? fTradeOk[k] ?? false : false
+  let st = has ? fStatus[k] ?? "" : ""
+  xSMin.plot(has ? xMin(fTime[k]) : null)
+  xSLevel.plot(has ? fLvl[k] : null)
+  xSStop.plot(has ? fExt[k] : null)
+  xSAvgFill.plot(has ? fFill[k] : null)
+  xSPressed.plot(has && tradeOk ? pressed : null)
+  xSLargeShare.plot(has && tradeOk && pressed > 0.0 ? (fBig[k] ?? 0.0) / pressed : null)
+  xSReclaimX.plot(has && tradeOk && pressed > 0.0 ? (fBack[k] ?? 0.0) / pressed : null)
+  xSTradeCover.plot(has && tradeOk ? fCover[k] : null)
+  xSStoppedOut.plot(has ? fStopped[k] : null)
+  xSBreakFlow.plot(has && (fFlowOk[k] ?? false) ? fQty[k] : null)
+  xSCounterflow.plot(has && (fCounterOk[k] ?? false) && (fFlowOk[k] ?? false) ? fDone[k] : null)
+  xSNetFlow.plot(has && (fCounterOk[k] ?? false) ? fNet[k] : null)
+  xSStatus.plot(has ? ((fLive[k] ?? false) ? 1.0 : str.startsWith(st, "failed") ? -1.0 : 0.0) : null)
+  xSTradeOk.plot(has ? (tradeOk ? 1.0 : 0.0) : null)
+  xSWick.plot(has ? ((fWick[k] ?? false) ? 1.0 : 0.0) : null)
+  xSBreakMin.plot(has ? xMin(fFrom[k]) : null)
+}
+// The level being traded through, the nearest watched levels, live zones and divergences.
+fn exportContext(c: float?) {
+  let act = -1
+  let above = -1.0
+  let below = -1.0
+  let watching = 0
+  for k in 0..lvState.len {
+    let st = lvState[k] ?? 3
+    let pr = lvP[k] ?? 0.0
+    if st == 1 || st == 2 {
+      if act < 0 || (lvFrom[k] ?? time.fromUnixSeconds(0)) > (lvFrom[act] ?? time.fromUnixSeconds(0)) { act = k }
+    }
+    if st == 0 {
+      watching += 1
+      if c != null {
+        if pr >= c && (above < 0.0 || pr < above) { above = pr }
+        if pr < c && (below < 0.0 || pr > below) { below = pr }
+      }
+    }
+  }
+  xActPrice.plot(act >= 0 ? lvP[act] : null)
+  xActDir.plot(act >= 0 ? lvDir[act] : null)
+  xActFlush.plot(act >= 0 ? lvFlush[act] : null)
+  xActState.plot(act >= 0 ? float(lvState[act] ?? 0) : null)
+  xActHeld.plot(act >= 0 ? float(lvHeld[act] ?? 0) : null)
+  xActBars.plot(act >= 0 ? float(lvBars[act] ?? 0) : null)
+  xActFrom.plot(act >= 0 ? xMin(lvFrom[act]) : null)
+  xWatchAbove.plot(above >= 0.0 ? above : null)
+  xWatchBelow.plot(below >= 0.0 ? below : null)
+  xWatchCount.plot(float(watching))
+  let za = -1
+  let zb = -1
+  for k in 0..zLo.len {
+    if (zLive[k] ?? false) && c != null {
+      let lo = zLo[k] ?? 0.0
+      let hi = zHi[k] ?? 0.0
+      if lo > c && (za < 0 || lo < (zLo[za] ?? 0.0)) { za = k }
+      if hi < c && (zb < 0 || hi > (zHi[zb] ?? 0.0)) { zb = k }
+    }
+  }
+  xZoneAboveLo.plot(za >= 0 ? zLo[za] : null)
+  xZoneAboveHi.plot(za >= 0 ? zHi[za] : null)
+  xZoneAboveSign.plot(za >= 0 ? zSign[za] : null)
+  xZoneBelowLo.plot(zb >= 0 ? zLo[zb] : null)
+  xZoneBelowHi.plot(zb >= 0 ? zHi[zb] : null)
+  xZoneBelowSign.plot(zb >= 0 ? zSign[zb] : null)
+  xDivBearMin.plot(xMinU(divBearT))
+  xDivBearPrice.plot(divBearT > 0.0 ? divBearP : null)
+  xDivBullMin.plot(xMinU(divBullT))
+  xDivBullPrice.plot(divBullT > 0.0 ? divBullP : null)
+}
+
 // The average entries along the bars, the forming bar included, with names and distances at the right edge.
 on chart.update {
   ensureListed()
+  // agent export: this bar's stats (live bar included), as the Bar Stats script computes them
+  let xbv = useChart ? chart.forming.buyVolume : (bnC.forming.buyVolume ?? 0.0) + (bbC.forming.buyVolume ?? 0.0) + (useAll ? (okC.forming.buyVolume ?? 0.0) : 0.0)
+  let xsv = useChart ? chart.forming.sellVolume : (bnC.forming.sellVolume ?? 0.0) + (bbC.forming.sellVolume ?? 0.0) + (useAll ? (okC.forming.sellVolume ?? 0.0) : 0.0)
+  let xoo = oiAgg.forming.open
+  let xoc = oiAgg.forming.close
+  if xbv != null && xsv != null && xoo != null && xoc != null {
+    let xd = xbv - xsv
+    let xdo = xoc - xoo
+    xBarPlusL.plot((xdo + xd) / 2.0)
+    xBarPlusS.plot((xdo - xd) / 2.0)
+    xBarBuy.plot(xbv)
+    xBarSell.plot(xsv)
+    xBarDelta.plot(xd)
+    xBarOi.plot(xoc)
+    xBarDOi.plot(xdo)
+  }
+  xBarLongLiq.plot(liqC.forming.buyLiq ?? 0.0)
+  xBarShortLiq.plot(liqC.forming.sellLiq ?? 0.0)
   if chart.isLast {
     // the newest trap on each side (tracked or finished), for the corner panel at the bottom right
     let newestL = -1
@@ -1188,6 +1412,9 @@ on chart.update {
       if (lvState[k] ?? 3) != 3 { watching += 1 }
     }
     script.setTitle(str.format("Swordfish Offside | traps {0} long, {1} short | {2} levels watched | {3} div | {4} zones", nTL, nTS, watching, nDiv, nZones))
+    exportTrapL(newestL)
+    exportTrapS(newestS)
+    exportContext(chart.forming.close)
     if (showTraps || showWick) && newestL >= 0 {
       hud.get("L").set(12.0, 16.0 + textSize + 4.0, trapLine(newestL, "Trapped longs"), color: sellColor, size: textSize - 2.0, textAlign: "right")
     } else {
