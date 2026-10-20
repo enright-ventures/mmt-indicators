@@ -1,3 +1,15 @@
+## Offside review fixes (2026-10-21)
+
+A review of commit 8940957 reproduced five issues; each now has a production-harness regression test that fails on the old code (the live-export readiness check did not exist before):
+
+1. Live flow exports and Bar Stats summed venues without checking that each forming candle and the open interest were on the current bar. Both now require every selected, listed venue and OI on the bar, plot or show nothing otherwise, and gate liquidations separately. Bar Stats' shading scale learns only from complete bars.
+2. A missing 5m bar compressed the reclaim deadline and the hold. A gap now drops any break or hold in progress and ends tracked traps; no break is read on the first bar after it. The Python reference engine applies the same rule (two new tests).
+3. The 1% pooled allowance could exceed a small venue's whole volume, so an absent venue passed. A venue or side with candle volume must now have supplied trades, and its allowance is capped at half its own volume.
+4. A row's buys and sells were placed by their combined average price, so opposite-side aggression could move trades across the level (the review's case: 101 reported pressed, 1 actual). Each side is now placed by its own average price; only same-side trades within one 0.01% row of the level remain ambiguous.
+5. The +L/+S flow-weighted prices carried weights across data gaps although the docs said they reset. A missing chart bar or an unready bar now resets them.
+
+Also: prices in Offside's table, corner panel, captions and flow-price labels use decimals for their size (low-priced coins read 0 before), coverage shows one decimal, and an unknown liquidation total shows as n/a. Full suite: 56 passed. MMT `script_check` passes for Offside and Bar Stats. The review's interpretation points stand: traps are a price-pattern hypothesis with measured aggression, not identified trapped inventory, and the recorded backtest covers the price pattern only, not the trade features.
+
 ## Offside trade-layer review fixes (2026-10-15)
 
 Price tracking now ends only on price invalidation or the tracking deadline. Counterflow is displayed in coins as a proxy and cannot identify an unwind. Pressed volume covers broken bars through the reclaim close; reclaim volume starts at the successful reclaim and continues through its hold. Failed reclaim attempts reset reclaim volume.

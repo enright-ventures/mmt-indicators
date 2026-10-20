@@ -35,8 +35,10 @@ reclaim holds. On 5m bars, whatever the chart timeframe:
 
 1. **Level**: 4h swing highs and lows by default (optional: weekly to yearly VWAP levels).
 2. **Break**: a 5m bar trades through it by at least 0.03%.
-3. **Reclaim**: a 5m close back on the original side within 60 minutes.
-4. **Hold** (the trigger): three 5m closes stay on that side without taking the flush extreme.
+3. **Reclaim**: a 5m close back on the original side within 60 minutes (12 consecutive 5m bars from the break bar).
+4. **Hold** (the trigger): three consecutive 5m closes stay on that side without taking the flush extreme. A missing
+   5m bar drops any break or hold in progress (price in the gap is unknown), ends tracked traps ("ended: 5m data
+   gap"), and no break is read on the first bar after it.
 5. **Measured from trades** (MMT Ultra, the last 12 hours by default, trades of $1,000 or more): the aggressive selling executed below a broken
    support during the break (or buying above a broken resistance), its volume-weighted average fill, the share in
    prints of $100k or more, and **reclaim x**, the opposite aggression back on the reclaimed side from the reclaim
@@ -47,16 +49,19 @@ reclaim holds. On 5m bars, whatever the chart timeframe:
    price is known, so to save memory BTC, ETH and SOL load only trades above the dollar minimum at a high price
    (BTC $200k, ETH $5k, SOL $500: 0.005 BTC, 0.2 ETH, 2 SOL); other coins load every print. Coverage counts every
    loaded trade: on every bar each venue's buy and sell totals must reach 80% of its 5m candle (setting) and not exceed
-   it by more than 2%, give or take 1% of the pooled volume. MMT's trade feeds run slightly short on some venues
-   (Bybit about 95%). A missing venue or side fails. Each trap shows the share of candle volume its trades covered
-   ("trades 98% of vol"). Without covered trade data a trap falls back to the break VWAP (HLC3 weighted by volume).
+   it by more than 2%. A small venue may also miss by 1% of the pooled volume, but never by more than half its own,
+   and a venue or side whose candle has volume must have supplied trades. MMT's trade feeds run slightly short on
+   some venues (Bybit about 95%). Each trap shows the share of candle volume its trades covered ("trades 98.4% of
+   vol"). Within each 0.01% price row, sells and buys are each placed by their own average price, so buying cannot
+   pull selling across the level; only same-side trades within one row of the level can land on the wrong side.
+   Without covered trade data a trap falls back to the break VWAP (HLC3 weighted by volume).
 6. **Flow proxies from candles and OI**: `+S = (dOI - D) / 2` and `+L = (dOI + D) / 2` cannot identify positions or
    participants. "Break flow proxy" sums the positive proxy over the break, including the reclaim bar; "Counterflow
    proxy" sums its opposite sign after the hold, in coins. Measured net flow since the hold is shown beside it.
    Counterflow never ends price tracking: only a close back through the level, a breach of the flush extreme, or
    the tracking time limit ends a trap. **Stop**: the flush extreme.
 
-Missing or misaligned candles/OI on any selected venue withhold flow readings. A gap during the break makes its total unavailable; a later gap makes counterflow unavailable for that trap. Price-pattern detection continues. Flow-weighted prices reset after a data gap and are not participant entries or P&L.
+Missing or misaligned candles/OI on any selected venue withhold flow readings. A gap during the break makes its total unavailable; a later gap makes counterflow unavailable for that trap. Price-pattern detection continues. Liquidations count only when MMT's liquidation stat is on the same bar; otherwise the trap's liquidation total shows as "n/a". The +L/+S flow-weighted prices reset to unavailable after a missing chart bar or a bar without aligned candles and OI, then rebuild from valid bars; they are not participant entries or P&L. The live-bar values in Bar Stats and Offside's agent export are shown only when every selected venue's forming candle and the open interest are on the current bar; otherwise they are left empty rather than summed from a stale venue.
 
 The marker sits beyond the flush extreme on the bar where the hold completed; it is larger when the pressed size beats
 the recent average. The level line and the dotted line carry short captions ("4h swing low 80,345 | failed breakdown |

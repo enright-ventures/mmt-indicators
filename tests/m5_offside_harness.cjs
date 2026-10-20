@@ -29,7 +29,8 @@ const context = {
     min: Math.min, floor: Math.floor },
   unix: x => x, int: Math.trunc, float: Number,
   time: { fromUnixSeconds: x => x },
-  str: { format: (template, ...values) => template.replace(/\{(\d+)[^}]*\}/g, (_, i) => values[+i]), },
+  str: { format: (template, ...values) => template.replace(/\{(\d+)[^}]*\}/g, (_, i) => values[+i]),
+    concat: (...parts) => parts.join('') },
   ensureListed: () => {}, niceStep: x => x, drawTrap: () => {}, events: [],
 };
 // Production scalar defaults and array capacities (M5 arrays start empty).
@@ -53,7 +54,7 @@ for (const value of Object.values(context)) {
 }
 context.bPos = new Map();
 vm.createContext(context);
-for (const name of ['candleOk', 'flowReady5', 'measureLevel', 'measureAll', 'onTrade', 'volumeMatches', 'venueCovered', 'tradeCoverageReady', 'creditBar']) {
+for (const name of ['candleOk', 'flowReady5', 'flowReadyLive', 'liveFlowReady', 'flowStep', 'priceText', 'measureLevel', 'measureAll', 'onTrade', 'volumeMatches', 'venueCovered', 'tradeCoverageReady', 'creditBar']) {
   vm.runInContext(translate(block(`fn ${name}(`)), context);
 }
 vm.runInContext(translate(block('on p5.close {')), context);
@@ -62,7 +63,10 @@ for (const bar of input.bars ?? []) {
   context.p5 = {time: bar.time, high: 103, low: 99, close: 102, volume: 1, buyVolume: 0, sellVolume: 0, ...bar.candle};
   for (const venue of ['bn5', 'bb5', 'ok5']) context[venue] = { ...context.p5, ...bar[venue] };
   context.oi5 = {time: bar.time, open: 0, close: 0, ...bar.oi};
-  context.liq5 = {buyLiq: 0, sellLiq: 0};
+  context.liq5 = {time: bar.time, buyLiq: 0, sellLiq: 0, ...bar.liq};
   context.closeBar();
 }
-console.log(JSON.stringify(Object.fromEntries(['events', 'fLive', 'fDone', 'fStatus', 'lvPressed', 'lvBack', 'lvTradeOk', 'measuredTime'].map(k => [k, context[k]]))));
+// Direct calls of production helpers: [{fn, args}] -> results, then any state fields named in `read`.
+const calls = (input.calls ?? []).map(c => context[c.fn](...c.args));
+console.log(JSON.stringify({...Object.fromEntries(['events', 'fLive', 'fDone', 'fStatus', 'lvPressed', 'lvBack', 'lvTradeOk', 'lvState', 'measuredTime'].map(k => [k, context[k]])),
+  calls, read: Object.fromEntries((input.read ?? []).map(k => [k, context[k]]))}));

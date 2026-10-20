@@ -104,15 +104,24 @@ class Watch:
         return False
 
 
-def find_traps(bars: list[Bar], levels: list[Level]) -> list[Trap]:
-    """Default MMT fixed-side rules, including slot reuse, deduplication and reclaim-bar flow."""
+def find_traps(bars: list[Bar], levels: list[Level], bar_seconds: int = 300) -> list[Trap]:
+    """Default MMT fixed-side rules, including slot reuse, deduplication and reclaim-bar flow. A missing bar (a time
+    step above `bar_seconds`) drops every break or hold in progress, since price in the gap is unknown, and no break is
+    read on the first bar after it."""
     ordered = sorted(levels, key=lambda level: level.available)
     watches: list[Watch] = []
     events: list[Trap] = []
     next_level = 0
     last = {1: -10**18, -1: -10**18}
     previous = 0.0
+    previous_time: int | None = None
     for index, bar in enumerate(bars):
+        if previous_time is not None and bar.time - previous_time > bar_seconds:
+            for i, watch in enumerate(watches):
+                if watch.phase in (Phase.BROKEN, Phase.HOLDING):
+                    watches[i] = Watch(watch.level)
+            previous = nan
+        previous_time = bar.time
         while next_level < len(ordered) and ordered[next_level].available <= index:
             level = ordered[next_level]
             next_level += 1

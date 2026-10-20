@@ -52,7 +52,43 @@ state (
   peakLongLiq = rolling<float>(memory)
   peakShortLiq = rolling<float>(memory)
   names = entities.labelPool(max: 5, on: statsPane, anchor: anchor.right)
+  // venues that list this coin (checked once; a venue without the coin is not required)
+  listedSet: bool = false
+  lsBn: bool = false
+  lsBb: bool = false
+  lsOk: bool = false
 )
+
+fn ensureListed() {
+  if !listedSet {
+    listedSet = true
+    lsBn = markets.tickSize("binancef", context.symbol) != null
+    lsBb = markets.tickSize("bybitf", context.symbol) != null
+    lsOk = markets.tickSize("okxf", context.symbol) != null
+  }
+}
+
+fn candleOk(t: time, ct: time?, bv: float?, sv: float?) -> bool {
+  return ct == t && math.isFinite(bv) && math.isFinite(sv)
+}
+
+// Every listed selected venue's forming (live) or closed candle is on the bar at t, and so is the open interest. A
+// venue still on an earlier bar would otherwise be summed as if current.
+fn readyLive(t: time) -> bool {
+  if !(oi.forming.time == t && math.isFinite(oi.forming.open) && math.isFinite(oi.forming.close)) { return false }
+  if useChart { return candleOk(t, chart.forming.time, chart.forming.buyVolume, chart.forming.sellVolume) }
+  let any = lsBn || lsBb || (useAll && lsOk)
+  return any && (!lsBn || candleOk(t, bnC.forming.time, bnC.forming.buyVolume, bnC.forming.sellVolume)) && (!lsBb || candleOk(t, bbC.forming.time, bbC.forming.buyVolume, bbC.forming.sellVolume)) &&
+    (!useAll || !lsOk || candleOk(t, okC.forming.time, okC.forming.buyVolume, okC.forming.sellVolume))
+}
+
+fn readyClosed(t: time) -> bool {
+  if !(oi.time == t && math.isFinite(oi.open) && math.isFinite(oi.close)) { return false }
+  if useChart { return candleOk(t, chart.time, chart.buyVolume, chart.sellVolume) }
+  let any = lsBn || lsBb || (useAll && lsOk)
+  return any && (!lsBn || candleOk(t, bnC.time, bnC.buyVolume, bnC.sellVolume)) && (!lsBb || candleOk(t, bbC.time, bbC.buyVolume, bbC.sellVolume)) &&
+    (!useAll || !lsOk || candleOk(t, okC.time, okC.buyVolume, okC.sellVolume))
+}
 
 // One cell: row r (0 = bottom), shaded by sign and size against its row's recent peak.
 fn cell(r: int, v: float, peak: float, positive: bool) {
@@ -73,23 +109,28 @@ fn volumeCell(bv: float, sv: float, peak: float) {
 }
 
 on chart.update {
+  ensureListed()
   floor.plot(0.0)
   ceiling.plot(5.0)
+  let lt = chart.forming.time
   let bv = useChart ? chart.forming.buyVolume : (bnC.forming.buyVolume ?? 0.0) + (bbC.forming.buyVolume ?? 0.0) + (useAll ? (okC.forming.buyVolume ?? 0.0) : 0.0)
   let sv = useChart ? chart.forming.sellVolume : (bnC.forming.sellVolume ?? 0.0) + (bbC.forming.sellVolume ?? 0.0) + (useAll ? (okC.forming.sellVolume ?? 0.0) : 0.0)
   let o = oi.forming.open
   let c = oi.forming.close
-  if bv != null && sv != null && o != null && c != null {
+  // a reading that is not ready leaves its cells empty rather than showing a partial or stale sum
+  cells.clear()
+  if lt != null && readyLive(lt) && bv != null && sv != null && o != null && c != null {
     let d = bv - sv
     let dOi = c - o
     let nl = (dOi + d) / 2.0
     let ns = (dOi - d) / 2.0
     // peaks from closed bars, so the live bar is shaded against settled values
-    cells.clear()
     cell(2, nl, math.max(peakNL.max() ?? 0.0, math.abs(nl)), nl >= 0.0)
     cell(1, ns, math.max(peakNS.max() ?? 0.0, math.abs(ns)), ns >= 0.0)
     volumeCell(bv, sv, math.max(peakTotal.max() ?? 0.0, bv + sv))
-    // MMT's buyLiq is longs liquidated, sellLiq shorts liquidated (checked against 1m returns)
+  }
+  // MMT's buyLiq is longs liquidated, sellLiq shorts liquidated (checked against 1m returns); checked separately
+  if lt != null && liq.forming.time == lt && math.isFinite(liq.forming.buyLiq) && math.isFinite(liq.forming.sellLiq) {
     let ll = liq.forming.buyLiq ?? 0.0
     let sl = liq.forming.sellLiq ?? 0.0
     cell(4, ll, math.max(peakLongLiq.max() ?? 0.0, ll), false)
@@ -106,17 +147,22 @@ on chart.update {
 }
 
 on chart.close {
+  ensureListed()
+  let ct = chart.time
   let bv = useChart ? chart.buyVolume : (bnC.buyVolume ?? 0.0) + (bbC.buyVolume ?? 0.0) + (useAll ? (okC.buyVolume ?? 0.0) : 0.0)
   let sv = useChart ? chart.sellVolume : (bnC.sellVolume ?? 0.0) + (bbC.sellVolume ?? 0.0) + (useAll ? (okC.sellVolume ?? 0.0) : 0.0)
   let o = oi.open
   let c = oi.close
-  if bv != null && sv != null && o != null && c != null {
+  // the shading scale learns only from complete bars
+  if ct != null && readyClosed(ct) && bv != null && sv != null && o != null && c != null {
     let d = bv - sv
     let dOi = c - o
     peakNL.push(math.abs((dOi + d) / 2.0))
     peakNS.push(math.abs((dOi - d) / 2.0))
     peakTotal.push(bv + sv)
   }
-  peakLongLiq.push(liq.buyLiq ?? 0.0)
-  peakShortLiq.push(liq.sellLiq ?? 0.0)
+  if ct != null && liq.time == ct && math.isFinite(liq.buyLiq) && math.isFinite(liq.sellLiq) {
+    peakLongLiq.push(liq.buyLiq ?? 0.0)
+    peakShortLiq.push(liq.sellLiq ?? 0.0)
+  }
 }
