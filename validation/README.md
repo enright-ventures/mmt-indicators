@@ -1,3 +1,9 @@
+## Offside: volume profiles instead of trades (2026-10-22)
+
+Offside loaded 12 hours of individual trades (about 1 million on BTC across three perps) to measure a few dozen 5m bars a day; cold starts took 6 to 14 minutes and coincided with MMT's script-memory errors. A cold-load test showed the time is the first download of trade history: a different size minimum loaded in 15 s once the trades were cached, so raising the minimum would not have helped. Trades of $5,000+ were 96% of Binance's loaded volume, 93% of OKX's and 86% of Bybit's.
+
+A probe of MMT's 5m volume profiles on BTC (Binance + Bybit + OKX, combined by MMT) found 4,761 snapshots (about 16.5 days), every one aligned with its 5m bar, no gaps, $2.50 price bins, and profile volume equal to the venues' summed candle volume (ratio 1.0001). Offside now measures pressed, average fill and reclaim volume from these profiles, cut at the level with `from`/`to`; the trade subscriptions, size and dollar minimums, per-venue coverage reconciliation and the large-print share are removed. On the live chart the profile version reached the live bar in 8 seconds with the same traps as the trade version, and measured a trap from 18 October that was outside the old 12-hour trade window. Tests: 50 pass; trade-only tests (coverage, minimums, venue reconciliation) were removed with the code they covered, and new tests cover a missing or misaligned profile and volume at the level's own price.
+
 ## Other indicators review fixes (2026-10-21)
 
 A second review of 8940957 covered the other indicators. Each fix has a test in `tests/test_other_indicators.py`, which runs the production blocks through a generic Node harness (`tests/m5_script_harness.cjs`) with stubbed feeds; all six tests fail on the old scripts (the two Rolling VWAP tests because their helpers are new):

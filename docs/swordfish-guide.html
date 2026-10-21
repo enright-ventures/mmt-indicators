@@ -207,7 +207,7 @@ html { scroll-behavior: smooth; }
 </dl>
 
 <h2 id="offside">Swordfish Offside</h2>
-<p class="tagline">Where traders are caught offside, following Stable workshop 11: a level that matters breaks, price reclaims it, and the reclaim holds. Each break is measured from individual trades (MMT Ultra), with break-flow and counterflow proxies beside it.</p>
+<p class="tagline">Where traders are caught offside, following Stable workshop 11: a level that matters breaks, price reclaims it, and the reclaim holds. Each break is measured from MMT's 5m volume profiles, with break-flow and counterflow proxies beside it.</p>
 
 <h3 id="offside-key">Key</h3>
 <div class="key">
@@ -221,11 +221,11 @@ html { scroll-behavior: smooth; }
   </div>
   <div class="glyph">
     <svg viewBox="0 0 74 50" aria-hidden="true"><polygon points="12,32 24,32 18,24" fill="var(--buy)" opacity=".67"/><polygon points="42,36 60,36 51,23" fill="var(--buy)"/><text x="6" y="46" font-family="IBM Plex Mono, monospace" font-size="8" fill="var(--muted)">usual   many</text></svg>
-    <div><strong>Marker size</strong><span>Bigger and solid when the size pressed through the level (from trades) beats its recent average.</span></div>
+    <div><strong>Marker size</strong><span>Bigger and solid when the size pressed through the level (from the volume profile) beats its recent average.</span></div>
   </div>
   <div class="glyph">
     <svg viewBox="0 0 74 50" aria-hidden="true"><line x1="4" y1="18" x2="30" y2="18" stroke="var(--buy)" stroke-width="1"/><line x1="30" y1="30" x2="70" y2="30" stroke="var(--buy)" stroke-width="1.5" stroke-dasharray="2 3"/><line x1="30" y1="42" x2="56" y2="42" stroke="var(--buy)" stroke-width="1.5" stroke-dasharray="2 3" opacity=".4"/></svg>
-    <div><strong>Level and average fill</strong><span>The solid line is the broken level. The dotted line is the average price at which the pressers' trades filled beyond the level ("sellers' avg fill below level"). Without trade data it falls back to the break bars' volume-weighted HLC3 ("break VWAP").</span></div>
+    <div><strong>Level and average fill</strong><span>The solid line is the broken level. The dotted line is the volume-weighted average price of the pressing beyond the level ("sellers' avg fill below level"). Without a volume profile it falls back to the break bars' volume-weighted HLC3 ("break VWAP").</span></div>
   </div>
   <div class="glyph">
     <svg viewBox="0 0 74 50" aria-hidden="true"><line x1="8" y1="22" x2="66" y2="10" stroke="var(--sell)" stroke-width="1.5" stroke-dasharray="5 4"/><circle cx="8" cy="22" r="2" fill="var(--sell)"/><circle cx="66" cy="10" r="2" fill="var(--sell)"/><line x1="8" y1="32" x2="66" y2="44" stroke="var(--buy)" stroke-width="1.5" stroke-dasharray="5 4"/></svg>
@@ -248,14 +248,13 @@ html { scroll-behavior: smooth; }
   <li><b>The break.</b> A 5m bar trades through the level by at least 0.03% of price, coming from the other side.</li>
   <li><b>The reclaim.</b> A 5m close back on the original side within 60 minutes. A break that stays through the level longer than that counts as acceptance, and the level is dropped.</li>
   <li><b>The hold (the trigger).</b> The next three 5m closes (15 minutes) stay on the reclaimed side and the flush extreme is not taken. If a close slips back through within the hour, the break continues; if the flush extreme is taken, there is no trap.</li>
-  <li><b>Measured from trades</b> (MMT Ultra, the last 12 hours by default, Binance, Bybit and OKX perps, trades of $1,000 or more). Each 5m bar's trades are bucketed into 0.01% price rows, and every level under test is measured from them. Within a row, sells and buys are each placed by their own average price, so buying cannot pull selling across the level; only same-side trades within one row of the level can land on the wrong side:
+  <li><b>Measured from 5m volume profiles.</b> MMT's buy and sell volume per price for each 5m bar, combined across Binance, Bybit and OKX perps by MMT, cut exactly at the level on MMT's native price bins ($2.50 on BTC). Volume at the level's own price counts on neither side. No individual trades are loaded; MMT keeps about 16 days of 5m profiles, so traps days old are measured and the script reaches the live bar in seconds:
     <ul class="tight">
-      <li><b>Pressed:</b> aggressive selling executed below a broken support on broken bars through the reclaim close (buying above a broken resistance for failed breakouts); holding bars do not add pressing.</li>
-      <li><b>Avg fill:</b> the volume-weighted price of that pressing.</li>
-      <li><b>Large:</b> the share of it in prints of $100k or more.</li>
+      <li><b>Pressed:</b> aggressive selling below a broken support on broken bars through the reclaim close (buying above a broken resistance for failed breakouts); holding bars do not add pressing.</li>
+      <li><b>Avg fill:</b> the volume-weighted price of that pressing (each price bin at its midpoint).</li>
       <li><b>Reclaim x:</b> the opposite aggression back on the reclaimed side, from the successful reclaim through the hold, divided by the pressed size. A failed reclaim resets this back-volume before another attempt. Workshop 11's reclaim on volume: above 1, more came back than pressed.</li>
     </ul>
-    The dollar minimum ("Count trades from", $1,000) is checked per trade at its own price, so it is the same on every coin. MMT filters trades by size in coins only, fixed before any price is known, so to save memory BTC, ETH and SOL load only trades above the dollar minimum at a high price (BTC $200k, ETH $5k, SOL $500); other coins load every print. Coverage counts every loaded trade: on every bar of the trap, each venue's buy and sell totals must reach 80% of its 5m candle volume (a setting) and not exceed it by more than 2%, give or take 1% of the pooled volume; a small venue may also miss by 1% of the pooled volume but never by more than half its own, and a venue or side whose candle has volume must have supplied trades, so a missing venue or side fails. The readout shows the share of candle volume the trap's trades covered, e.g. "trades 98% of vol". Traps without covered trade data show "no trade data" and the break VWAP instead.</li>
+    A bar without its profile makes the trap's readings unavailable: it shows "no volume profile" and the break VWAP instead.</li>
   <li><b>Flow proxies from candles and OI.</b> +S = (dOI &minus; delta) / 2 and +L = (dOI + delta) / 2 cannot identify positions or participants. "Break flow proxy" sums the positive proxy over the break, including the reclaim bar. Liquidations of the trapped side are reported separately.</li>
   <li><b>Stop and invalidation.</b> The flush extreme. A trap also fails if a 5m close goes back through the level.</li>
   <li>One trap per side per hour, since nearby levels often break together.</li>
@@ -265,7 +264,7 @@ html { scroll-behavior: smooth; }
 
 <h3>Readouts</h3>
 <p><b>Corner panel</b> (bottom right of the price pane): the newest trap on each side. For example:</p>
-<div class="readout"><span class="b">Illustrative format: Trapped shorts [UTC time] | 4h swing low [level] | pressed [size] below at avg [fill] ([share] large) | reclaim [ratio]x | [size] longs liq | stop [price] | counterflow proxy [size] | holding</span></div>
+<div class="readout"><span class="b">Illustrative format: Trapped shorts [UTC time] | 4h swing low [level] | pressed [size] below at avg [fill] | reclaim [ratio]x | [size] longs liq | stop [price] | counterflow proxy [size] | holding</span></div>
 <ul class="tight">
   <li>Time is the 5m bar where the hold completed, in UTC (the chart shows local time).</li>
   <li>Status:
@@ -277,7 +276,7 @@ html { scroll-behavior: smooth; }
     </ul>
   </li>
 </ul>
-<p><b>Recent traps window</b> (badge beside the script's name): the last 40 traps, with level, pressed, avg fill, large share, reclaim x, longs or shorts liquidated, stop, break-flow proxy, counterflow proxy, measured net flow since the hold, and status. Columns sort.</p>
+<p><b>Recent traps window</b> (badge beside the script's name): the last 40 traps, with level, pressed, avg fill, reclaim x, longs or shorts liquidated, stop, break-flow proxy, counterflow proxy, measured net flow since the hold, and status. Columns sort.</p>
 <p><b>Right edge:</b> +L and +S flow-weighted prices, proxy weights and price distance. These are not position sizes, entries or P&amp;L.</p>
 <h3 id="fuel">Counterflow proxy</h3>
 <p>After the hold, the opposite sign of the same proxy (&minus;S for trapped shorts, &minus;L for trapped longs) accumulates in coins. It does not identify who closed a position, and it never ends price tracking, even when it exceeds the break-flow proxy or that proxy is zero. The measured net flow (buys minus sells from candles) since the hold sits beside it in the Recent traps window. Only price invalidation or the time limit ends tracking.</p>
@@ -351,7 +350,7 @@ html { scroll-behavior: smooth; }
     <tr><td>Calendar VWAP</td><td>Binance + Bybit perps 30m and 4h</td><td>Binance and Bybit REST candles</td><td>Within 0.01%</td></tr>
     <tr><td>Rolling VWAP</td><td>Binance + Bybit perps 30m and 1D</td><td>Binance and Bybit REST candles</td><td>Within 0.01% (7D and 30D within 10 cents)</td></tr>
     <tr><td>Delta Heat</td><td>MMT volume snapshots, 3 perps</td><td>MMT's own per-row volumes</td><td>Rows are MMT's figures; live bar from 1m snapshots</td></tr>
-    <tr><td>Offside traps</td><td>5m candles, OI and trades, Binance, Bybit and OKX perps; 4h swing levels</td><td>Python replica on Binance 5m data (Binance-only run)</td><td>Same traps: 9/9 STX, 8/8 BTC</td></tr>
+    <tr><td>Offside traps</td><td>5m candles, volume profiles and OI, Binance, Bybit and OKX perps; 4h swing levels</td><td>Python replica on Binance 5m data (Binance-only run)</td><td>Same traps: 9/9 STX, 8/8 BTC</td></tr>
     <tr><td>Bar Stats liquidations</td><td>MMT stats, 3 perps</td><td>Side check on 1m returns</td><td>buyLiq = long liquidations</td></tr>
   </tbody>
 </table></div>

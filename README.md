@@ -24,7 +24,7 @@ The full reference, with a visual key for every line and marker, is [`docs/sword
 | **Swordfish Calendar VWAP** (`swordfish-calendar-vwap.m5`) | Weekly, monthly, quarterly and yearly VWAPs with ±1 standard deviation bands, current, previous and older periods, labelled (e.g. `2026 Q1 +1SD`; not value areas, which Composites draw) | 30m (W/M) and 4h (Q/Y) candles, Binance + Bybit perps pooled |
 | **Swordfish Rolling VWAP** (`swordfish-rolling-vwap.m5`) | Trailing 7D, 30D and 365D VWAPs | 30m and daily candles, Binance + Bybit perps pooled |
 | **Swordfish Delta Heat** (`swordfish-delta-heat.m5`) | A delta ladder on every candle: net aggressive buying or selling per price row, in dollars, length relative to the candle's largest row, colour against a typical bar | MMT volume snapshots, Binance + Bybit + OKX perps |
-| **Swordfish Offside** (`swordfish-offside.m5`) | Failed breakdowns and breakouts, measured from individual trades (pressed size, average fill, large prints, reclaim volume) with break-flow and counterflow proxies; delta divergences, reaction zones and flow-weighted prices | Trades (MMT Ultra), 5m candles, open interest and liquidations; Binance, Bybit and OKX perps |
+| **Swordfish Offside** (`swordfish-offside.m5`) | Failed breakdowns and breakouts, measured from MMT's 5m volume profiles (pressed size, average fill, reclaim volume) with break-flow and counterflow proxies; delta divergences, reaction zones and flow-weighted prices | 5m volume profiles and candles, open interest and liquidations; Binance, Bybit and OKX perps |
 | **Swordfish Bar Stats** (`swordfish-bar-stats.m5`) | A table under the chart: long and short liquidations, signed +L and +S flow proxies, volume split with net delta | Open interest, liquidations and candles, Binance, Bybit and OKX perps |
 
 ### Offside's trap definition
@@ -38,22 +38,15 @@ reclaim holds. On 5m bars, whatever the chart timeframe:
 4. **Hold** (the trigger): three consecutive 5m closes stay on that side without taking the flush extreme. A missing
    5m bar drops any break or hold in progress (price in the gap is unknown), ends tracked traps ("ended: 5m data
    gap"), and no break is read on the first bar after it.
-5. **Measured from trades** (MMT Ultra, the last 12 hours by default, trades of $1,000 or more): the aggressive selling executed below a broken
-   support during the break (or buying above a broken resistance), its volume-weighted average fill, the share in
-   prints of $100k or more, and **reclaim x**, the opposite aggression back on the reclaimed side from the reclaim
-   through the successful hold divided by the pressed size (workshop 11's reclaim on volume). Pressed covers broken
-   bars through the reclaim close; holding bars add only reclaim volume. A failed reclaim resets reclaim volume.
-   Venues: Binance, Bybit and OKX perps. The dollar minimum ("Count trades from", $1,000) is checked per trade at its
-   own price, so it is the same rule on every coin. MMT can only filter trades by size in coins, fixed before any
-   price is known, so to save memory BTC, ETH and SOL load only trades above the dollar minimum at a high price
-   (BTC $200k, ETH $5k, SOL $500: 0.005 BTC, 0.2 ETH, 2 SOL); other coins load every print. Coverage counts every
-   loaded trade: on every bar each venue's buy and sell totals must reach 80% of its 5m candle (setting) and not exceed
-   it by more than 2%. A small venue may also miss by 1% of the pooled volume, but never by more than half its own,
-   and a venue or side whose candle has volume must have supplied trades. MMT's trade feeds run slightly short on
-   some venues (Bybit about 95%). Each trap shows the share of candle volume its trades covered ("trades 98.4% of
-   vol"). Within each 0.01% price row, sells and buys are each placed by their own average price, so buying cannot
-   pull selling across the level; only same-side trades within one row of the level can land on the wrong side.
-   Without covered trade data a trap falls back to the break VWAP (HLC3 weighted by volume).
+5. **Measured from 5m volume profiles**: MMT's buy and sell volume per price for each 5m bar, combined across the
+   selected perps by MMT, cut exactly at the level on MMT's native price bins ($2.50 on BTC). Pressed: the aggressive
+   selling below a broken support on broken bars through the reclaim close (buying above a broken resistance); its
+   volume-weighted average price; and **reclaim x**, the opposite aggression back on the reclaimed side from the
+   successful reclaim through the hold divided by the pressed size (workshop 11's reclaim on volume). Holding bars add
+   only reclaim volume, and a failed reclaim resets it. Volume at the level's own price counts on neither side. No
+   individual trades are loaded: MMT keeps about 16 days of 5m profiles, so traps days old are measured, and Offside
+   reaches the live bar in seconds. A bar without its profile makes that trap's readings unavailable, and it falls back
+   to the break VWAP (HLC3 weighted by volume).
 6. **Flow proxies from candles and OI**: `+S = (dOI - D) / 2` and `+L = (dOI + D) / 2` cannot identify positions or
    participants. "Break flow proxy" sums the positive proxy over the break, including the reclaim bar; "Counterflow
    proxy" sums its opposite sign after the hold, in coins. Measured net flow since the hold is shown beside it.
@@ -100,10 +93,10 @@ side is described at the bottom right; every trap is in the script's "Recent tra
 - MMT keeps per-price volume snapshots for about the last 1,000 bars. The ladder, the reaction zones and the old wick
   markers only exist for that span.
 - Offside's trap detection looks back 5 days of 5m bars. Its 4h swing levels use about 50 days of 4h bars.
-- Offside's trade layer loads the last 12 hours of trades from the selected perps. All BTC prints over 24 hours (about
-  6 million) took about 6.5 minutes from a cold start and coincided with MMT's "script service is at its memory
-  limit" errors, hence the shorter default and the coin floors above. Lower "Trade history (hours)" to load faster.
-  A minimized or background tab loads far slower, and two MMT tabs on one workspace compete.
+- Offside measures breaks from MMT's 5m volume profiles (about 16 days of them, aligned with the 5m bars, profile
+  volume equal to the venues' candle volume). Earlier versions loaded individual trades: 12 to 24 hours of them took
+  6 to 14 minutes from a cold start and coincided with MMT's script-memory errors; the profile version reaches the
+  live bar in about 8 seconds. Two MMT tabs on one workspace still load everything twice.
 
 ## Agent exports (m5)
 
@@ -116,7 +109,7 @@ nothing on the chart, and they are plotted from the update handler, so the live 
   newest and prior VAH/POC/VAL, because `script_get_plot_values` only returns the first layer of a script that is on the
   chart twice (Daily and Weekly).
 - Calendar VWAP: `x.{W,M,Q,Y}.vwap` and `.sd` for the current period, and `x.{pW,pM,pQ,pY}.*` for the prior one.
-- Offside: `x.trap_longs.*` and `x.trap_shorts.*` (level, stop, status, reclaim_x, flows, trade coverage),
+- Offside: `x.trap_longs.*` and `x.trap_shorts.*` (level, stop, status, pressed, avg_fill, reclaim_x, flows),
   `x.active.*` (the level being tracked), `x.watch.*`, `x.zone_above.*` and `x.zone_below.*`, divergences
   (`x.div_bull.*`, `x.div_bear.*`), the current bar's flow (`x.bar.*`: buy and sell volume, delta, liquidations, the
   +L and +S proxies, OI), and the Delta Heat ladder summary (`x.heat.*`).
@@ -165,4 +158,4 @@ osacompile -o ~/Applications/"Import to MMT.app" tools/import-to-mmt.applescript
 
 ## Regression checks
 
-Run `uv run --with pytest --with numpy --with polars pytest -q`. Tests exercise watchlist failure recovery, the fixed-side trap engine, and Offside trade accounting. Node.js 18+ is required for the trade-accounting harness, which executes the production M5 helpers and 5m handler with synthetic feeds through a limited JavaScript translation; it does not compile M5 or simulate MMT feed scheduling. MMT `script_check` validates indicator syntax/types; it does not prove live feed synchronization or chart rendering.
+Run `uv run --with pytest --with numpy --with polars pytest -q`. Tests exercise watchlist failure recovery, the fixed-side trap engine, and Offside accounting. Node.js 18+ is required for the Offside harness, which executes the production M5 helpers and 5m handler with synthetic feeds through a limited JavaScript translation; it does not compile M5 or simulate MMT feed scheduling. MMT `script_check` validates indicator syntax/types; it does not prove live feed synchronization or chart rendering.
