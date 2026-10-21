@@ -63,3 +63,19 @@ def test_expired_level_does_not_start_trap() -> None:
     events = find_traps(bars, [Level(1, 100, 1, 300)])
 
     assert events == []
+
+
+def test_missing_bar_drops_a_break_in_progress() -> None:
+    # Break at 300, then nothing until 7500 (two hours later): the reclaim and hold after the gap are not a trap.
+    bars = [Bar(0, 102, 101, 101, 1), Bar(300, 101, 98, 99, 1), Bar(7500, 102, 99, 101, 1)]
+    bars += [Bar(t, 103, 100, 102, 1) for t in (7800, 8100, 8400)]
+
+    assert find_traps(bars, [Level(1, 100, 1, 99999)]) == []
+
+
+def test_no_break_is_read_across_a_missing_bar() -> None:
+    # The close before the gap was above the level; the first bar after it trades below. Unknown path: no break.
+    bars = [Bar(0, 102, 101, 101, 1), Bar(3600, 102, 98, 101, 1)]
+    bars += [Bar(t, 103, 100, 102, 1) for t in (3900, 4200, 4500)]
+
+    assert find_traps(bars, [Level(1, 100, 1, 99999)]) == []

@@ -266,6 +266,9 @@ state (
   lvBack = float[](120)
   lvTradeOk = bool[](120)
   prevC5: float = 0.0
+  // the last 5m bar processed (unix s), to detect a missing bar, and the last closed chart bar
+  prevT5: float = 0.0
+  prevChartT: float = 0.0
   lastTrap = map<int, float>(2)
   recentNew = rolling<float>(20)
   // 4h swing detection: the last 7 bars
@@ -407,8 +410,14 @@ fn flowReadyLive(t: time) -> bool {
     (!useAll || !lsOk || candleOk(t, okC.forming.time, okC.forming.buyVolume, okC.forming.sellVolume))
 }
 
-// One 5m bar's bucketed trades measured against level k: sells below it and buys above it. A row is placed by its
-// average traded price, so a level inside a row is resolved to 0.01% of price.
+// The forming bar's volume and open interest are all on the bar at t (Bar Stats and the agent export use this).
+fn liveFlowReady(t: time) -> bool {
+  return flowReadyLive(t) && oiAgg.forming.time == t && math.isFinite(oiAgg.forming.open) && math.isFinite(oiAgg.forming.close)
+}
+
+// One 5m bar's bucketed trades measured against level k: sells below it and buys above it. Each side of a row is
+// placed by its own average price (sells by the sells', buys by the buys'), so buying cannot pull selling across the
+// level or the reverse; only same-side trades within one 0.01% row of the level can still land on the wrong side.
 fn measureLevel(k: int, L: float) {
   let sell = 0.0
   let sellPv = 0.0
@@ -426,14 +435,15 @@ fn measureLevel(k: int, L: float) {
     buyBig = bTotBuyBig
   } else {
     for i in 0..bSell.len {
-      let sz = (bSell[i] ?? 0.0) + (bBuy[i] ?? 0.0)
-      let avg = sz > 0.0 ? ((bSellPv[i] ?? 0.0) + (bBuyPv[i] ?? 0.0)) / sz : L
-      if avg < L {
-        sell += bSell[i] ?? 0.0
+      let sq = bSell[i] ?? 0.0
+      let bq = bBuy[i] ?? 0.0
+      if sq > 0.0 && (bSellPv[i] ?? 0.0) / sq < L {
+        sell += sq
         sellPv += bSellPv[i] ?? 0.0
         sellBig += bSellBig[i] ?? 0.0
-      } else if avg > L {
-        buy += bBuy[i] ?? 0.0
+      }
+      if bq > 0.0 && (bBuyPv[i] ?? 0.0) / bq > L {
+        buy += bq
         buyPv += bBuyPv[i] ?? 0.0
         buyBig += bBuyBig[i] ?? 0.0
       }
@@ -541,6 +551,51 @@ fn onTrade(p: float, sz: float, buy: bool, tt: time, venueId: int) {
     bTotSellPv += p * sz
     bTotSellBig += big
   }
+}
+
+// Fold one closed chart bar into the +L/+S flow-weighted prices: weights fade by `keep`, positive proxy flow adds weight
+// at the bar's HLC3, negative flow removes weight in proportion. A bar that is not ready (a missing bar, or a selected
+// venue's candle or the open interest not on it) resets all four accumulators: the flow in a gap is unknown, so weights
+// from before it are not carried into later prices. The prices are unavailable until valid bars rebuild them.
+fn flowStep(ready: bool, nl: float, ns: float, p: float, keep: float) {
+  if !ready {
+    lQty = 0.0
+    lCost = 0.0
+    sQty = 0.0
+    sCost = 0.0
+    return
+  }
+  lQty = lQty * keep
+  lCost = lCost * keep
+  sQty = sQty * keep
+  sCost = sCost * keep
+  if nl > 0.0 {
+    lQty += nl
+    lCost += nl * p
+  } else if lQty > 0.0 {
+    let f = math.max(0.0, 1.0 + nl / lQty)
+    lQty = lQty * f
+    lCost = lCost * f
+  }
+  if ns > 0.0 {
+    sQty += ns
+    sCost += ns * p
+  } else if sQty > 0.0 {
+    let f = math.max(0.0, 1.0 + ns / sQty)
+    sQty = sQty * f
+    sCost = sCost * f
+  }
+}
+
+// A price with decimals for its size: 80,345 / 2,460.5 / 184.23 / 0.19345.
+fn priceText(v: float) -> string {
+  let a = math.abs(v)
+  if a >= 10000.0 { return str.format("{0:,.0}", v) }
+  if a >= 1000.0 { return str.format("{0:,.1}", v) }
+  if a >= 100.0 { return str.format("{0:.2}", v) }
+  if a >= 10.0 { return str.format("{0:.3}", v) }
+  if a >= 1.0 { return str.format("{0:.4}", v) }
+  return str.format("{0:.5}", v)
 }
 
 // Dollars as $850K or $2.1M.
@@ -656,12 +711,12 @@ fn drawTrap(k: int, now: time) {
     table.cell(side < 0.0 ? "Longs" : "Shorts", fg: tint),
     fName[k] ?? "",
     tradeOk ? str.format("{0:,.0} {1}", pressed, coin) : "-",
-    tradeOk ? str.format("{0:,.0}", fFill[k] ?? 0.0) : "-",
+    tradeOk ? priceText(fFill[k] ?? 0.0) : "-",
     tradeOk && pressed > 0.0 ? str.format("{0:.0%}", (fBig[k] ?? 0.0) / pressed) : "-",
     tradeOk && pressed > 0.0 ? str.format("{0:.1}x", (fBack[k] ?? 0.0) / pressed) : "-",
-    tradeOk ? str.format("{0:.0%}", math.min(fCover[k] ?? 0.0, 1.0)) : "-",
-    wick ? "-" : str.format("{0:,.0} {1}", fStopped[k] ?? 0.0, coin),
-    str.format("{0:,.0}", fExt[k] ?? 0.0),
+    tradeOk ? str.format("{0:.1%}", math.min(fCover[k] ?? 0.0, 1.0)) : "-",
+    wick || (fStopped[k] ?? 0.0) < 0.0 ? "-" : str.format("{0:,.0} {1}", fStopped[k] ?? 0.0, coin),
+    priceText(fExt[k] ?? 0.0),
     flowOk ? str.format("{0:,.0} {1}", fQty[k] ?? 0.0, coin) : "-",
     (fCounterOk[k] ?? false) && flowOk ? str.format("{0:,.0} {1}", fDone[k] ?? 0.0, coin) : "-",
     (fCounterOk[k] ?? false) ? str.format("{0:+,.0} {1}", fNet[k] ?? 0.0, coin) : "-",
@@ -676,12 +731,12 @@ fn trapLine(k: int, name: string) -> string {
   let tradeOk = fTradeOk[k] ?? false
   let pressed = fPressed[k] ?? 0.0
   let measured = wick ? str.format("{0:,.0} {1} in the wick", fQty[k] ?? 0.0, coin) :
-    tradeOk ? str.format("pressed {0:,.0} {1} {2} at avg {3:,.0} ({4:.0%} large) | reclaim {5:.1}x | trades {6:.0%} of vol", pressed, coin, side > 0.0 ? "below" : "above", fFill[k] ?? 0.0, pressed > 0.0 ? (fBig[k] ?? 0.0) / pressed : 0.0, pressed > 0.0 ? (fBack[k] ?? 0.0) / pressed : 0.0, math.min(fCover[k] ?? 0.0, 1.0)) :
-    str.format("no trade data | break VWAP {0:,.0}", fFill[k] ?? 0.0)
-  let stopped = wick ? "" : str.format(" | {0:,.0} {1} liq", fStopped[k] ?? 0.0, side > 0.0 ? "longs" : "shorts")
+    tradeOk ? str.format("pressed {0:,.0} {1} {2} at avg {3} ({4:.0%} large) | reclaim {5:.1}x | trades {6:.1%} of vol", pressed, coin, side > 0.0 ? "below" : "above", priceText(fFill[k] ?? 0.0), pressed > 0.0 ? (fBig[k] ?? 0.0) / pressed : 0.0, pressed > 0.0 ? (fBack[k] ?? 0.0) / pressed : 0.0, math.min(fCover[k] ?? 0.0, 1.0)) :
+    str.concat("no trade data | break VWAP ", priceText(fFill[k] ?? 0.0))
+  let stopped = wick ? "" : (fStopped[k] ?? 0.0) < 0.0 ? " | liquidations n/a" : str.format(" | {0:,.0} {1} liq", fStopped[k] ?? 0.0, side > 0.0 ? "longs" : "shorts")
   let est = (fCounterOk[k] ?? false) ? str.format(" | counterflow proxy {0:,.0} {1}", fDone[k] ?? 0.0, coin) : " | counterflow unavailable"
   return str.concat(name, " ", at != null ? time.format(at, "{MM}-{DD} {HH}:{mm} UTC") : "", " | ", fName[k] ?? "", " | ", measured, stopped,
-    " | stop ", str.format("{0:,.0}", fExt[k] ?? 0.0), showFuel ? est : "", " | ", fStatus[k] ?? "")
+    " | stop ", priceText(fExt[k] ?? 0.0), showFuel ? est : "", " | ", fStatus[k] ?? "")
 }
 
 // A new trap into the next ring slot, with its marker. qty is the positive break-flow proxy; pressed, fill, big
@@ -865,15 +920,18 @@ on h4.close {
 }
 
 // Both sides of each selected venue's trades must reach the coverage share of its aligned candle (trades below the
-// size floor are not loaded) and not exceed it by more than 2%, give or take 1% of the pooled side (so a small venue's
-// feed noise does not withhold the bar); 100% means an exact match (one part per million, or 1e-8 coins). A partial
-// first bar, a missing venue, or discarded late trades fail it. Matched volume is summed for the coverage readout.
+// size floor are not loaded) and not exceed it by more than 2%. A small venue may also miss by up to 1% of the pooled
+// side, but never by more than half its own volume, so feed noise does not withhold the bar while an absent venue or
+// side still fails: a venue/side whose candle has volume must have supplied trades. 100% means an exact match (one
+// part per million, or 1e-8 coins). A partial first bar or discarded late trades fail it. Matched volume is summed for
+// the coverage readout.
 fn volumeMatches(actual: float, expected: float?, pooled: float) -> bool {
   if expected == null { return false }
   if !math.isFinite(expected) || expected < 0.0 { return false }
   let exact = math.max(0.00000001, math.abs(expected) * 0.000001)
   if coverPct >= 100.0 { return math.abs(actual - expected) <= exact }
-  let slack = pooled * 0.01
+  if expected > exact && actual <= 0.0 { return false }
+  let slack = math.min(pooled * 0.01, expected * 0.5)
   return actual >= expected * coverPct / 100.0 - slack - exact && actual <= expected * 1.02 + slack + exact
 }
 
@@ -926,6 +984,22 @@ on p5.close {
     ensureListed()
     if step <= 0.0 { step = rowSize > 0.0 ? rowSize : niceStep(c * 0.0006 * tfScale) }
     let now = unix(t)
+    // a missing 5m bar: whatever price did in the gap is unknown, so setups in progress are dropped (the level is
+    // watched again), tracked traps end, and no break is read from a close before the gap
+    let gap = prevT5 > 0.0 && now - prevT5 > 300.0
+    if gap {
+      for k in 0..lvP.len {
+        let gst = lvState[k] ?? 3
+        if gst == 1 || gst == 2 { lvState[k] = 0 }
+      }
+      for k in 0..fSide.len {
+        if fLive[k] ?? false {
+          fLive[k] = false
+          fStatus[k] = "ended: 5m data gap"
+          drawTrap(k, t)
+        }
+      }
+    }
     // this bar's trades against every level, if they have all arrived (otherwise the next bar's first trade does it)
     if useTrades && bTime == now { measureAll() }
     let tradesCovered = tradeCoverageReady(t)
@@ -939,8 +1013,10 @@ on p5.close {
     let dOi = flowOk && oo != null && oc != null ? oc - oo : 0.0
     let nl = (dOi + d) / 2.0
     let ns = (dOi - d) / 2.0
-    let longLiq = liq5.buyLiq ?? 0.0
-    let shortLiq = liq5.sellLiq ?? 0.0
+    // liquidations only when the stat is on this bar; otherwise the break's liquidation total becomes unknown (-1)
+    let liqOk = liq5.time == t && math.isFinite(liq5.buyLiq) && math.isFinite(liq5.sellLiq)
+    let longLiq = liqOk ? liq5.buyLiq ?? 0.0 : 0.0
+    let shortLiq = liqOk ? liq5.sellLiq ?? 0.0 : 0.0
     let vv = p5.volume ?? 0.0
     let pp = (h + l + c) / 3.0
 
@@ -968,8 +1044,8 @@ on p5.close {
       }
     }
 
-    // levels: watching, broken, holding
-    if showTraps {
+    // levels: watching, broken, holding (not on the first bar after a gap)
+    if showTraps && !gap {
       let poke = pokePct / 100.0
       for k in 0..lvP.len {
         let st = lvState[k] ?? 3
@@ -992,7 +1068,7 @@ on p5.close {
                 lvBars[k] = 1
                 lvHeld[k] = 0
                 lvNew[k] = dir > 0.0 ? math.max(ns, 0.0) : math.max(nl, 0.0)
-                lvStop[k] = dir > 0.0 ? longLiq : shortLiq
+                lvStop[k] = liqOk ? (dir > 0.0 ? longLiq : shortLiq) : -1.0
                 lvPv[k] = pp * vv
                 lvV[k] = vv
                 lvFrom[k] = t
@@ -1016,7 +1092,7 @@ on p5.close {
               lvFlowOk[k] = (lvFlowOk[k] ?? false) && flowOk
               lvFlush[k] = dir > 0.0 ? math.min(lvFlush[k] ?? l, l) : math.max(lvFlush[k] ?? h, h)
               lvNew[k] = (lvNew[k] ?? 0.0) + (dir > 0.0 ? math.max(ns, 0.0) : math.max(nl, 0.0))
-              lvStop[k] = (lvStop[k] ?? 0.0) + (dir > 0.0 ? longLiq : shortLiq)
+              lvStop[k] = liqOk && (lvStop[k] ?? 0.0) >= 0.0 ? (lvStop[k] ?? 0.0) + (dir > 0.0 ? longLiq : shortLiq) : -1.0
               lvPv[k] = (lvPv[k] ?? 0.0) + pp * vv
               lvV[k] = (lvV[k] ?? 0.0) + vv
               if back {
@@ -1036,7 +1112,7 @@ on p5.close {
                   creditBar(k, dir, now, true, false, tradesCovered)
                   lvFlowOk[k] = (lvFlowOk[k] ?? false) && flowOk
                   lvNew[k] = (lvNew[k] ?? 0.0) + (dir > 0.0 ? math.max(ns, 0.0) : math.max(nl, 0.0))
-                  lvStop[k] = (lvStop[k] ?? 0.0) + (dir > 0.0 ? longLiq : shortLiq)
+                  lvStop[k] = liqOk && (lvStop[k] ?? 0.0) >= 0.0 ? (lvStop[k] ?? 0.0) + (dir > 0.0 ? longLiq : shortLiq) : -1.0
                   lvPv[k] = (lvPv[k] ?? 0.0) + pp * vv
                   lvV[k] = (lvV[k] ?? 0.0) + vv
                 } else {
@@ -1052,7 +1128,7 @@ on p5.close {
                   if now - (lastTrap.get(sideKey) ?? -1000000000.0) >= 3600.0 {
                     lastTrap.set(sideKey, now)
                     let pain = (lvV[k] ?? 0.0) > 0.0 ? (lvPv[k] ?? 0.0) / (lvV[k] ?? 1.0) : L
-                    let name = str.format("{0} {1:,.0}", lvName[k] ?? "", L)
+                    let name = str.concat(lvName[k] ?? "", " ", priceText(L))
                     let pr = lvPressed[k] ?? 0.0
                     let tOk = (lvTradeOk[k] ?? false) && pr > 0.0
                     addTrap(dir, t, lvFrom[k] ?? t, lvNew[k] ?? 0.0, lvFlush[k] ?? L, pain, L, name, lvStop[k] ?? 0.0, false, lvFlowOk[k] ?? false, pr, tOk ? (lvPressedPv[k] ?? 0.0) / pr : pain, lvBig[k] ?? 0.0, lvBack[k] ?? 0.0, tOk, (lvCovC[k] ?? 0.0) > 0.0 ? (lvCovT[k] ?? 0.0) / (lvCovC[k] ?? 1.0) : 0.0)
@@ -1065,6 +1141,7 @@ on p5.close {
       }
     }
     prevC5 = c
+    prevT5 = now
   }
 }
 
@@ -1105,40 +1182,18 @@ on chart.close {
       }
     }
 
-    // Fade proxy weights, add positive flow at HLC3, reduce weight on negative flow.
+    // Fade proxy weights, add positive flow at HLC3, reduce weight on negative flow. A missing chart bar, or a bar
+    // without every selected venue's candle and the open interest on it, resets the weights (see flowStep).
     let bv = useChart ? chart.buyVolume : (bnC.buyVolume ?? 0.0) + (bbC.buyVolume ?? 0.0) + (useAll ? (okC.buyVolume ?? 0.0) : 0.0)
     let sv = useChart ? chart.sellVolume : (bnC.sellVolume ?? 0.0) + (bbC.sellVolume ?? 0.0) + (useAll ? (okC.sellVolume ?? 0.0) : 0.0)
     let oo = oiAgg.open
     let oc = oiAgg.close
-    if flowReadyClosed(t) && oiAgg.time == t && bv != null && sv != null && oo != null && oc != null {
-      let keep = math.pow(0.5, 1.0 / halfLife) ?? 1.0
-      lQty = lQty * keep
-      lCost = lCost * keep
-      sQty = sQty * keep
-      sCost = sCost * keep
-      let d = bv - sv
-      let dOi = oc - oo
-      let nl = (dOi + d) / 2.0
-      let ns = (dOi - d) / 2.0
-      let p = (h + l + c) / 3.0
-      if nl > 0.0 {
-        lQty += nl
-        lCost += nl * p
-      } else if lQty > 0.0 {
-        let f = math.max(0.0, 1.0 + nl / lQty)
-        lQty = lQty * f
-        lCost = lCost * f
-      }
-      if ns > 0.0 {
-        sQty += ns
-        sCost += ns * p
-      } else if sQty > 0.0 {
-        let f = math.max(0.0, 1.0 + ns / sQty)
-        sQty = sQty * f
-        sCost = sCost * f
-      }
-    }
-    // a bar with a missing or misaligned venue candle is skipped; the weights carry over
+    let chartGap = prevChartT > 0.0 && unix(t) - prevChartT > tfSec
+    prevChartT = unix(t)
+    let fready = !chartGap && flowReadyClosed(t) && oiAgg.time == t && bv != null && sv != null && oo != null && oc != null
+    let fd = (bv ?? 0.0) - (sv ?? 0.0)
+    let fdOi = (oc ?? 0.0) - (oo ?? 0.0)
+    flowStep(fready, (fdOi + fd) / 2.0, (fdOi - fd) / 2.0, (h + l + c) / 3.0, math.pow(0.5, 1.0 / halfLife) ?? 1.0)
 
     // the bar's rows: the largest, the wicks, the zones and the net
     let b = vol.bucketsByStep(step)
@@ -1291,7 +1346,7 @@ fn exportTrapL(k: int) {
   xLLargeShare.plot(has && tradeOk && pressed > 0.0 ? (fBig[k] ?? 0.0) / pressed : null)
   xLReclaimX.plot(has && tradeOk && pressed > 0.0 ? (fBack[k] ?? 0.0) / pressed : null)
   xLTradeCover.plot(has && tradeOk ? fCover[k] : null)
-  xLStoppedOut.plot(has ? fStopped[k] : null)
+  xLStoppedOut.plot(has && (fStopped[k] ?? 0.0) >= 0.0 ? fStopped[k] : null)
   xLBreakFlow.plot(has && (fFlowOk[k] ?? false) ? fQty[k] : null)
   xLCounterflow.plot(has && (fCounterOk[k] ?? false) && (fFlowOk[k] ?? false) ? fDone[k] : null)
   xLNetFlow.plot(has && (fCounterOk[k] ?? false) ? fNet[k] : null)
@@ -1313,7 +1368,7 @@ fn exportTrapS(k: int) {
   xSLargeShare.plot(has && tradeOk && pressed > 0.0 ? (fBig[k] ?? 0.0) / pressed : null)
   xSReclaimX.plot(has && tradeOk && pressed > 0.0 ? (fBack[k] ?? 0.0) / pressed : null)
   xSTradeCover.plot(has && tradeOk ? fCover[k] : null)
-  xSStoppedOut.plot(has ? fStopped[k] : null)
+  xSStoppedOut.plot(has && (fStopped[k] ?? 0.0) >= 0.0 ? fStopped[k] : null)
   xSBreakFlow.plot(has && (fFlowOk[k] ?? false) ? fQty[k] : null)
   xSCounterflow.plot(has && (fCounterOk[k] ?? false) && (fFlowOk[k] ?? false) ? fDone[k] : null)
   xSNetFlow.plot(has && (fCounterOk[k] ?? false) ? fNet[k] : null)
@@ -1382,7 +1437,11 @@ on chart.update {
   let xsv = useChart ? chart.forming.sellVolume : (bnC.forming.sellVolume ?? 0.0) + (bbC.forming.sellVolume ?? 0.0) + (useAll ? (okC.forming.sellVolume ?? 0.0) : 0.0)
   let xoo = oiAgg.forming.open
   let xoc = oiAgg.forming.close
-  if xbv != null && xsv != null && xoo != null && xoc != null {
+  // only when every selected venue's forming candle and the open interest are on this bar; otherwise null, not a
+  // partial or stale sum
+  let xt = chart.forming.time
+  let xReady = xt != null && liveFlowReady(xt)
+  if xReady && xbv != null && xsv != null && xoo != null && xoc != null {
     let xd = xbv - xsv
     let xdo = xoc - xoo
     xBarPlusL.plot((xdo + xd) / 2.0)
@@ -1392,9 +1451,19 @@ on chart.update {
     xBarDelta.plot(xd)
     xBarOi.plot(xoc)
     xBarDOi.plot(xdo)
+  } else {
+    let none: float? = null
+    xBarPlusL.plot(none)
+    xBarPlusS.plot(none)
+    xBarBuy.plot(none)
+    xBarSell.plot(none)
+    xBarDelta.plot(none)
+    xBarOi.plot(none)
+    xBarDOi.plot(none)
   }
-  xBarLongLiq.plot(liqC.forming.buyLiq ?? 0.0)
-  xBarShortLiq.plot(liqC.forming.sellLiq ?? 0.0)
+  let xLiqOk = xt != null && liqC.forming.time == xt
+  xBarLongLiq.plot(xLiqOk ? liqC.forming.buyLiq : null)
+  xBarShortLiq.plot(xLiqOk ? liqC.forming.sellLiq : null)
   if chart.isLast {
     // the newest trap on each side (tracked or finished), for the corner panel at the bottom right
     let newestL = -1
@@ -1469,10 +1538,10 @@ on chart.update {
     shortLine.plot(sa)
     if chart.isLast && c != null {
       if la != null {
-        edge.get("L").set(8, la, str.format("+L flow price {0:,.0} | weight {1:,.0} {3} | distance {2:+.1%}", la, lq, c / la - 1.0, coin), color: longColor, size: textSize, textAlign: "right")
+        edge.get("L").set(8, la, str.format("+L flow price {0} | weight {1:,.0} {3} | distance {2:+.1%}", priceText(la), lq, c / la - 1.0, coin), color: longColor, size: textSize, textAlign: "right")
       } else { edge.delete("L") }
       if sa != null {
-        edge.get("S").set(8, sa, str.format("+S flow price {0:,.0} | weight {1:,.0} {3} | distance {2:+.1%}", sa, sq, c / sa - 1.0, coin), color: shortColor, size: textSize, textAlign: "right")
+        edge.get("S").set(8, sa, str.format("+S flow price {0} | weight {1:,.0} {3} | distance {2:+.1%}", priceText(sa), sq, c / sa - 1.0, coin), color: shortColor, size: textSize, textAlign: "right")
       } else { edge.delete("S") }
     }
   }

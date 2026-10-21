@@ -13,13 +13,14 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run(bars, state=None):
+def run(bars, state=None, calls=None, read=None):
     node = shutil.which("node")
     if node is None:
         pytest.fail("Node.js 18+ is required for the production M5 accounting tests")
     result = subprocess.run(
         [node, str(ROOT / "tests/m5_offside_harness.cjs"), str(ROOT / "indicators/swordfish/swordfish-offside.m5")],
-        input=json.dumps({"bars": bars, "state": state or {}}), text=True, capture_output=True, check=False, timeout=10,
+        input=json.dumps({"bars": bars, "state": state or {}, "calls": calls or [], "read": read or []}), text=True,
+        capture_output=True, check=False, timeout=10,
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
@@ -211,3 +212,61 @@ def test_trades_below_the_dollar_minimum_count_for_coverage_only():
     assert event["tradeOk"]
     assert event["pressed"] == 100
     assert event["cover"] == 1
+
+
+# Review of 21 October 2026, findings 1-5.
+
+def test_opposite_side_aggression_cannot_pull_trades_across_the_level():
+    # Finding 4: a big buy just below support and a sell just above it share a 0.01% row; only the sell at 98 is
+    # genuinely below the level.
+    first = bar(300, 101, [(99.995, 1000, True), (100.002, 100, False), (98, 1, False)], low=98)
+    bars = [first] + [bar(t, 102, [(101, 1, True)]) for t in (600, 900, 1200)]
+    event, = run(bars)["events"]
+    assert event["tradeOk"]
+    assert event["pressed"] == 1
+
+
+def test_a_small_venue_with_no_trades_fails_coverage():
+    # Finding 3: Bybit's candle has 1 coin of selling but its tape is empty; Binance's 1,000 cannot hide that.
+    first = bar(300, 101, low=98)
+    first["trades"] = [dict(price=99, size=1000, buy=False, venue=0)]
+    first["bn5"] = {"buyVolume": 0, "sellVolume": 1000}
+    first["bb5"] = {"buyVolume": 0, "sellVolume": 1}
+    bars = [first]
+    for t in (600, 900, 1200):
+        hold = bar(t, 102)
+        hold["trades"] = [dict(price=101, size=1000, buy=True, venue=0)]
+        hold["bn5"] = {"buyVolume": 1000, "sellVolume": 0}
+        hold["bb5"] = {"buyVolume": 1, "sellVolume": 0}
+        bars.append(hold)
+    event, = run(bars, {"useChart": False, "lsBb": True})["events"]
+    assert not event["tradeOk"]
+
+
+def test_a_missing_5m_bar_drops_the_break():
+    # Finding 2: break at 300, nothing until a reclaim at 7500 (two hours later), then three holds: no trap.
+    bars = [bar(300, 99, [(99, 10, False)], low=98), bar(7500, 101, [(101, 1, True)])]
+    bars += [bar(t, 102, [(101, 1, True)]) for t in (7800, 8100, 8400)]
+    assert run(bars)["events"] == []
+
+
+def test_unready_bar_resets_flow_weighted_prices():
+    # Finding 5: a bar without aligned feeds clears the +L/+S weights instead of carrying them over the gap.
+    seeded = {"lQty": 100, "lCost": 10000, "sQty": 50, "sCost": 5000}
+    out = run([], seeded, calls=[{"fn": "flowStep", "args": [False, 0, 0, 100, 1]}],
+              read=["lQty", "lCost", "sQty", "sCost"])
+    assert out["read"] == {"lQty": 0, "lCost": 0, "sQty": 0, "sCost": 0}
+    out = run([], seeded, calls=[{"fn": "flowStep", "args": [True, 10, -25, 110, 1]}],
+              read=["lQty", "lCost", "sQty", "sCost"])
+    assert out["read"] == {"lQty": 110, "lCost": 11100, "sQty": 25, "sCost": 2500}
+
+
+@pytest.mark.parametrize("bybit_time,oi_time,ready", [(600, 600, True), (300, 600, False), (600, 300, False)])
+def test_live_export_needs_every_venue_and_open_interest_on_the_bar(bybit_time, oi_time, ready):
+    # Finding 1: Bybit still on the previous bar (or stale open interest) must not be summed as current.
+    state = {"useChart": False, "lsBb": True,
+             "bnC": {"forming": {"time": 600, "buyVolume": 200, "sellVolume": 0}},
+             "bbC": {"forming": {"time": bybit_time, "buyVolume": 0, "sellVolume": 400}},
+             "oiAgg": {"forming": {"time": oi_time, "open": 10, "close": 10}}}
+    out = run([], state, calls=[{"fn": "liveFlowReady", "args": [600]}])
+    assert out["calls"] == [ready]
