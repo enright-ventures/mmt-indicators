@@ -830,8 +830,8 @@ fn addVwapLevels(u: int, prefix: string, w: float, pw: float, p2w: float, expire
   let sd = math.sqrt(math.max(p2w / w - m * m, 0.0)) ?? 0.0
   let base = str.concat(prefix, " ", unitName(u))
   addLevel(m, 0.0, str.concat(base, " VWAP"), expires)
-  addLevel(m + sd, 0.0, str.concat(base, " VAH"), expires)
-  addLevel(m - sd, 0.0, str.concat(base, " VAL"), expires)
+  addLevel(m + sd, 0.0, str.concat(base, " +1SD"), expires)
+  addLevel(m - sd, 0.0, str.concat(base, " -1SD"), expires)
 }
 
 fn addCandle(u: int, t: time, h: float?, l: float?, c: float?, v: float?) {

@@ -2,7 +2,10 @@ script "Swordfish Rolling VWAP"
 
 // Rolling 7-day, 30-day and 365-day VWAPs: HLC3 x volume over the trailing window, every bar. 7D and 30D roll on 30m
 // candles (336 and 1,440 of them), so they move with each bar; 365D rolls on daily candles, so it steps once a day.
-// Each window contains N-1 closed candles plus the forming candle (N candles total).
+// Each window contains N-1 closed candles plus the forming candle (N candles total), and counts only when those
+// candles are consecutive: a missing candle would stretch "7D" over more than 7 days, so each venue tracks its run of
+// consecutive candles and a window shows only once the run covers it. On the live bar the forming candle must follow
+// the last closed one, and pooled venues must end on the same candle.
 // Venues: Binance and Bybit perps pooled by default. Each venue keeps its own trailing window and the VWAP is their
 // summed price x volume over their summed volume (MMT gives scripts no combined candles). Both reach 2022 on MMT, so
 // the 365D window is full on both.
@@ -63,8 +66,27 @@ state (
   bSv30: float = 0.0
   bSpv365: float = 0.0
   bSv365: float = 0.0
+  // per venue and source: the last closed candle (unix s) and how many consecutive candles end there
+  aLastM: float = 0.0
+  aRunM: int = 0
+  bLastM: float = 0.0
+  bRunM: int = 0
+  aLastD: float = 0.0
+  aRunD: int = 0
+  bLastD: float = 0.0
+  bRunD: int = 0
   tags = entities.labelPool(max: 3, anchor: anchor.right)
 )
+
+fn secs(t: time?) -> float {
+  if t == null { return 0.0 }
+  return float(time.unixSeconds(t) ?? 0)
+}
+
+// The forming candle directly follows the last closed one.
+fn fresh(ft: time?, last: float, period: float) -> bool {
+  return ft != null && last > 0.0 && secs(ft) == last + period
+}
 
 // HLC3 x volume, or null for an incomplete candle.
 fn pvOf(h: float?, l: float?, c: float?, v: float?) -> float? {
@@ -76,6 +98,9 @@ on bnM.close {
   let pv = pvOf(bnM.high, bnM.low, bnM.close, bnM.volume)
   let v = bnM.volume
   if pv != null && v != null {
+    let ts = secs(bnM.time)
+    aRunM = aLastM > 0.0 && ts - aLastM == 1800.0 ? aRunM + 1 : 1
+    aLastM = ts
     if aPv7.isFull {
       aSpv7 -= aPv7[0] ?? 0.0
       aSv7 -= aV7[0] ?? 0.0
@@ -99,6 +124,9 @@ on bbM.close {
   let pv = pvOf(bbM.high, bbM.low, bbM.close, bbM.volume)
   let v = bbM.volume
   if pv != null && v != null {
+    let ts = secs(bbM.time)
+    bRunM = bLastM > 0.0 && ts - bLastM == 1800.0 ? bRunM + 1 : 1
+    bLastM = ts
     if bPv7.isFull {
       bSpv7 -= bPv7[0] ?? 0.0
       bSv7 -= bV7[0] ?? 0.0
@@ -122,6 +150,9 @@ on bnD.close {
   let pv = pvOf(bnD.high, bnD.low, bnD.close, bnD.volume)
   let v = bnD.volume
   if pv != null && v != null {
+    let ts = secs(bnD.time)
+    aRunD = aLastD > 0.0 && ts - aLastD == 86400.0 ? aRunD + 1 : 1
+    aLastD = ts
     if aPv365.isFull {
       aSpv365 -= aPv365[0] ?? 0.0
       aSv365 -= aV365[0] ?? 0.0
@@ -137,6 +168,9 @@ on bbD.close {
   let pv = pvOf(bbD.high, bbD.low, bbD.close, bbD.volume)
   let v = bbD.volume
   if pv != null && v != null {
+    let ts = secs(bbD.time)
+    bRunD = bLastD > 0.0 && ts - bLastD == 86400.0 ? bRunD + 1 : 1
+    bLastD = ts
     if bPv365.isFull {
       bSpv365 -= bPv365[0] ?? 0.0
       bSv365 -= bV365[0] ?? 0.0
@@ -148,7 +182,8 @@ on bbD.close {
   }
 }
 
-// The pooled VWAP of the chosen venues, each with its forming candle added; null until every used window is full.
+// The pooled VWAP of the chosen venues, each with its forming candle added; null unless every used window is covered
+// (fullA / fullB: a run of consecutive candles at least the window long, and on the live bar a fresh forming candle).
 fn pooled(fullA: bool, spvA: float, svA: float, fpvA: float?, fvA: float?, fullB: bool, spvB: float, svB: float, fpvB: float?, fvB: float?) -> float? {
   if (useBn && (!fullA || fpvA == null || fvA == null)) || (useBb && (!fullB || fpvB == null || fvB == null)) { return null }
   let pv = (useBn ? spvA + (fpvA ?? 0.0) : 0.0) + (useBb ? spvB + (fpvB ?? 0.0) : 0.0)
@@ -157,6 +192,10 @@ fn pooled(fullA: bool, spvA: float, svA: float, fpvA: float?, fvA: float?, fullB
 }
 
 on chart.update {
+  let live = chart.isLast
+  // on the live bar both venues must have a forming candle right after their last closed one, on the same candle
+  let liveM = !live || ((!useBn || fresh(bnM.forming.time, aLastM, 1800.0)) && (!useBb || fresh(bbM.forming.time, bLastM, 1800.0)) && (!useBn || !useBb || aLastM == bLastM))
+  let liveD = !live || ((!useBn || fresh(bnD.forming.time, aLastD, 86400.0)) && (!useBb || fresh(bbD.forming.time, bLastD, 86400.0)) && (!useBn || !useBb || aLastD == bLastD))
   let fa = bnM.forming
   let fb = bbM.forming
   let ga = bnD.forming
@@ -165,9 +204,9 @@ on chart.update {
   let fpvB = pvOf(fb.high, fb.low, fb.close, fb.volume)
   let gpvA = pvOf(ga.high, ga.low, ga.close, ga.volume)
   let gpvB = pvOf(gb.high, gb.low, gb.close, gb.volume)
-  let a7 = show7 ? pooled(aPv7.isFull, aSpv7, aSv7, fpvA, fa.volume, bPv7.isFull, bSpv7, bSv7, fpvB, fb.volume) : null
-  let a30 = show30 ? pooled(aPv30.isFull, aSpv30, aSv30, fpvA, fa.volume, bPv30.isFull, bSpv30, bSv30, fpvB, fb.volume) : null
-  let a365 = show365 ? pooled(aPv365.isFull, aSpv365, aSv365, gpvA, ga.volume, bPv365.isFull, bSpv365, bSv365, gpvB, gb.volume) : null
+  let a7 = show7 ? pooled(liveM && aRunM >= 335, aSpv7, aSv7, fpvA, fa.volume, liveM && bRunM >= 335, bSpv7, bSv7, fpvB, fb.volume) : null
+  let a30 = show30 ? pooled(liveM && aRunM >= 1439, aSpv30, aSv30, fpvA, fa.volume, liveM && bRunM >= 1439, bSpv30, bSv30, fpvB, fb.volume) : null
+  let a365 = show365 ? pooled(liveD && aRunD >= 364, aSpv365, aSv365, gpvA, ga.volume, liveD && bRunD >= 364, bSpv365, bSv365, gpvB, gb.volume) : null
   line7.plot(a7)
   line30.plot(a30)
   line365.plot(a365)

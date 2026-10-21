@@ -1,3 +1,16 @@
+## Other indicators review fixes (2026-10-21)
+
+A second review of 8940957 covered the other indicators. Each fix has a test in `tests/test_other_indicators.py`, which runs the production blocks through a generic Node harness (`tests/m5_script_harness.cjs`) with stubbed feeds; all six tests fail on the old scripts (the two Rolling VWAP tests because their helpers are new):
+
+- Calendar VWAP picked the live bar's periods from `chart.time` (the last confirmed bar), so at Monday 00:00 UTC the new week's first forming candle was added to the old week (the review's case: mean 150 instead of 100). The live bar now uses the forming candle's time; the forming candle counts only inside [start, end) of the period; and at the live edge a venue whose forming candle is missing or stale withholds the developing period instead of showing the old accumulator.
+- Rolling VWAP counted candles, not time: 335 hourly candles passed as a 7-day window. Each venue now tracks its run of consecutive candles; a window shows only once the run covers it, the live forming candle must follow the last closed one, and pooled venues must end on the same candle. After a real exchange gap a line stays hidden until a full gap-free window has built up.
+- Delta Heat's live ladder stopped at the first missing minute snapshot and drew only the later minutes. Missing minutes are now skipped, earlier minutes kept, and the title shows the shortfall ("live ladder: 28 of 30 minutes").
+- Bar Stats' live alignment is fixed in the Offside review fixes below.
+- Calendar VWAP's +/-1 standard deviation bands are renamed from VAH/VAL to +1SD/-1SD (ASCII in the scripts; the guide writes ±1σ), as are Offside's optional VWAP trap levels, so they are not confused with Composites' TPO value areas.
+- The older stand-alone scripts (Positioning NL/NS, OI Delta, Value Area Levels, Delta Footprint) are removed from the repo: they are not on the Swordfish v2 workspace and their roles are covered by Bar Stats, MMT's Open Interest pane, Composites/Calendar VWAP and Delta Heat. Their review findings were therefore not fixed.
+
+Full suite: 62 passed. MMT `script_check` passes for Calendar VWAP, Rolling VWAP, Delta Heat and Offside.
+
 ## Offside review fixes (2026-10-21)
 
 A review of commit 8940957 reproduced five issues; each now has a production-harness regression test that fails on the old code (the live-export readiness check did not exist before):
@@ -27,7 +40,7 @@ Trade readings require unfiltered buy and sell totals to reconcile separately ag
 ## Review-fix verification (2026-10-15)
 
 - 18 regression tests pass: quote mapping, empty/partial/failed watchlist replacement and recovery snapshots, retained markets, fixed-side traps, reclaim-bar flow, missing flow, invalidation/expiry, and Monday week boundaries.
-- MMT `script_check` returned `{"status":"ok","errors":[]}` for the changed indicators: Offside, Bar Stats, Positioning NL/NS, Rolling VWAP and Delta Heat.
+- MMT `script_check` returned `{"status":"ok","errors":[]}` for the changed indicators: Offside, Bar Stats, Positioning NL/NS (since removed from the repo), Rolling VWAP and Delta Heat.
 - Changed Python files compile; `git diff --check` passes. Basedpyright on the new engine, importer and tests reports zero errors and 176 warnings, chiefly dynamic/untyped JSON and legacy helper interfaces; this is not a clean type-check gate.
 - Runtime charts were not updated. Compiler checks do not establish live feed synchronization, subscription performance or visual rendering. Watchlist tests use a stateful fake service and do not mutate a real watchlist. Rolling exchange comparisons have not been rerun for the revised window.
 
