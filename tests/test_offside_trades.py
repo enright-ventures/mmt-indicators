@@ -154,3 +154,36 @@ def test_volume_at_the_level_counts_on_neither_side():
     assert event["tradeOk"]
     assert event["pressed"] == 10
     assert event["back"] == 3
+
+
+# PR #5 review: pooled profiles are not clipped to the chart candle, and the average uses native level prices.
+
+@pytest.mark.parametrize("side", [1, -1])
+def test_pooled_volume_outside_the_chart_candle_still_counts(side):
+    # Support at 100 (or resistance at 100, mirrored). The chart candle ranges 98-103, but another selected venue sold
+    # 100 at 97.5; in the holds the chart ranges 100-103 while the pool also bought 10 at 104.
+    m = (lambda p: p) if side > 0 else (lambda p: 200 - p)
+    first = bar(300, m(101), low=98 if side > 0 else 97, high=103 if side > 0 else 102)
+    first["levels"] = [(m(97.5), 0, 100) if side > 0 else (m(97.5), 100, 0), (m(99), 0, 1) if side > 0 else (m(99), 1, 0)]
+    holds = []
+    for t in (600, 900, 1200):
+        h = bar(t, m(102), low=100 if side > 0 else 97, high=103 if side > 0 else 100)
+        h["levels"] = [(m(101), 1, 0), (m(104), 10, 0)] if side > 0 else [(m(101), 0, 1), (m(104), 0, 10)]
+        holds.append(h)
+    state = {} if side > 0 else {"lvSide": [-1], "prevC5": 99}
+    event, = run([first] + holds, state)["events"]
+    assert event["tradeOk"]
+    assert event["pressed"] == 101
+    assert event["back"] == 33
+    assert event["fill"] == pytest.approx((97.5 * 100 + 99) / 101 if side > 0 else (102.5 * 100 + 101) / 101)
+
+
+def test_average_fill_uses_native_level_prices_inside_a_bin():
+    # Support at 100.5 inside the $2.50 bin [100, 102.5): 10 sold at the native level 100 is below the support, and
+    # its average is 100, not a bin midpoint above the support.
+    first = bar(300, 101, [(100, 10, False)], low=99)
+    bars = [first] + [bar(t, 102, [(101, 1, True)]) for t in (600, 900, 1200)]
+    event, = run(bars, {"lvP": [100.5]})["events"]
+    assert event["tradeOk"]
+    assert event["pressed"] == 10
+    assert event["fill"] == 100

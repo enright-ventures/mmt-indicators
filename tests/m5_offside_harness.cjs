@@ -1,5 +1,6 @@
 // Execute the production Offside helpers and 5m handler with synthetic feeds. Each bar's 5m volume profile is built
-// from its listed trades, summed by price (bar.profile = false: no profile; bar.profileTime: a misaligned one).
+// from its listed trades summed by price, or given as native levels (bar.levels); bar.profile = false: no profile;
+// bar.profileTime: a misaligned one.
 // This translates the small shared M5/JavaScript subset; it is not an MMT compiler.
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -61,20 +62,34 @@ for (const name of ['candleOk', 'flowReady5', 'flowReadyLive', 'liveFlowReady', 
 }
 vm.runInContext(translate(block('on p5.close {')), context);
 for (const bar of input.bars ?? []) {
-  // the bar's volume profile: its trades summed by price (each price its own zero-width bin)
+  // the bar's volume profile as native levels (price, buy, sell), lowest first: bar.levels if given (pooled
+  // venues can trade outside the chart candle), else its trades summed by price
   const levels = new Map();
-  for (const tr of bar.trades ?? []) {
-    const lv = levels.get(tr.price) ?? {from: tr.price, to: tr.price, buy: 0, sell: 0};
-    if (tr.buy) lv.buy += tr.size; else lv.sell += tr.size;
-    levels.set(tr.price, lv);
+  for (const [price, buy, sell] of bar.levels ?? []) levels.set(price, {price, buy, sell});
+  if (!bar.levels) {
+    for (const tr of bar.trades ?? []) {
+      const lv = levels.get(tr.price) ?? {price: tr.price, buy: 0, sell: 0};
+      if (tr.buy) lv.buy += tr.size; else lv.sell += tr.size;
+      levels.set(tr.price, lv);
+    }
   }
+  const sorted = [...levels.values()].sort((a, b) => a.price - b.price);
   const profileTime = bar.profile === false ? null : (bar.profileTime ?? bar.time);
   context.v5 = {
     time: () => profileTime,
-    binSize: () => 0.01,
+    binSize: () => 2.5,
+    levels: () => profileTime === null ? null : {length: sorted.length, get: i => sorted[i]},
+    // as documented: select levels in [from, to] first, then group them on a grid of whole multiples of step
     bucketsByStep: (step, from, to) => {
-      const inside = [...levels.values()].filter(lv => lv.from >= from && lv.from <= to).sort((a, b) => a.from - b.from);
-      return {length: inside.length, get: i => inside[i]};
+      const groups = new Map();
+      for (const lv of sorted) {
+        if ((from != null && lv.price < from) || (to != null && lv.price > to)) continue;
+        const k = Math.floor(lv.price / step);
+        const g = groups.get(k) ?? {from: k * step, to: (k + 1) * step, buy: 0, sell: 0};
+        g.buy += lv.buy; g.sell += lv.sell; groups.set(k, g);
+      }
+      const list = [...groups.values()].sort((a, b) => a.from - b.from);
+      return list.length ? {length: list.length, get: i => list[i]} : null;
     },
   };
   context.p5 = {time: bar.time, high: 103, low: 99, close: 102, volume: 1, buyVolume: 0, sellVolume: 0, ...bar.candle};

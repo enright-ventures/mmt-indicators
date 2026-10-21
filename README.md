@@ -39,11 +39,14 @@ reclaim holds. On 5m bars, whatever the chart timeframe:
    5m bar drops any break or hold in progress (price in the gap is unknown), ends tracked traps ("ended: 5m data
    gap"), and no break is read on the first bar after it.
 5. **Measured from 5m volume profiles**: MMT's buy and sell volume per price for each 5m bar, combined across the
-   selected perps by MMT, cut exactly at the level on MMT's native price bins ($2.50 on BTC). Pressed: the aggressive
+   selected perps by MMT, read level by level: every native profile price (about $2.50 apart on BTC) is classified
+   against the level by its own price, including volume outside the chart venue's candle. Pressed: the aggressive
    selling below a broken support on broken bars through the reclaim close (buying above a broken resistance); its
    volume-weighted average price; and **reclaim x**, the opposite aggression back on the reclaimed side from the
    successful reclaim through the hold divided by the pressed size (workshop 11's reclaim on volume). Holding bars add
-   only reclaim volume, and a failed reclaim resets it. Volume at the level's own price counts on neither side. No
+   only reclaim volume, and a failed reclaim resets it. Volume at the level's own price counts on neither side, and
+   the average uses each level's own price; the profile's price resolution still bounds how exactly a trade's price is
+   known. No
    individual trades are loaded: MMT keeps about 16 days of 5m profiles, so traps days old are measured, and Offside
    reaches the live bar in seconds. A bar without its profile makes that trap's readings unavailable, and it falls back
    to the break VWAP (HLC3 weighted by volume).

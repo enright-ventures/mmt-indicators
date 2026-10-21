@@ -683,23 +683,23 @@ on h4.close {
   }
 }
 
-// Volume in one 5m bar's profile between two prices (both included), on MMT's native price bins: sells, or buys, and
-// their price x volume (each bin at its midpoint), into profVol / profPv. False when the bar has no profile.
-fn readProfile(t: time, lo: float, hi: float, buys: bool) -> bool {
+// One 5m bar's profile against a level at L: the sells (or buys) at every native profile level strictly below (or
+// above) L, and their price x volume at each level's own price, into profVol / profPv. Every level of the pooled
+// profile is read, so volume outside the chart venue's candle range still counts, and volume at L itself counts on
+// neither side. The profile's own price resolution (its bin size, $2.50 on BTC) still bounds how exactly a trade's
+// price is known. False when the bar has no profile.
+fn readProfile(t: time, L: float, below: bool, buys: bool) -> bool {
   profVol = 0.0
   profPv = 0.0
   if v5.time() != t { return false }
-  let bin = v5.binSize() ?? 0.0
-  if !(bin > 0.0) { return false }
-  if hi < lo { return true }
-  let b = v5.bucketsByStep(math.max(bin, (hi - lo) / 4000.0), from: lo, to: hi)
-  if b == null { return true }
-  for i in 0..b.len {
-    let c = b.get(i)
-    if c != null {
-      let v = buys ? c.buy : c.sell
+  let lvs = v5.levels()
+  if lvs == null { return false }
+  for i in 0..lvs.len {
+    let lv = lvs.get(i)
+    if lv != null && (below ? lv.price < L : lv.price > L) {
+      let v = buys ? lv.buy : lv.sell
       profVol += v
-      profPv += v * (c.from + c.to) / 2.0
+      profPv += v * lv.price
     }
   }
   return true
@@ -707,18 +707,16 @@ fn readProfile(t: time, lo: float, hi: float, buys: bool) -> bool {
 
 // One 5m bar credited to a broken level at L: pressed (sells below a support, buys above a resistance) on broken bars
 // through the reclaim close, and back (the opposite aggression on the reclaimed side) from the successful reclaim
-// through the hold. The profile is cut just inside the level, so volume at the level's own price counts on neither
-// side. A bar without its profile marks the level's readings unavailable.
-fn creditBar(k: int, dir: float, t: time, L: float, lo: float, hi: float, withPressed: bool, withBack: bool) {
-  let edge = L * 0.0000001
+// through the hold. A bar without its profile marks the level's readings unavailable.
+fn creditBar(k: int, dir: float, t: time, L: float, withPressed: bool, withBack: bool) {
   let ok = true
   if withPressed {
-    ok = dir > 0.0 ? readProfile(t, lo, L - edge, false) : readProfile(t, L + edge, hi, true)
+    ok = dir > 0.0 ? readProfile(t, L, true, false) : readProfile(t, L, false, true)
     lvPressed[k] = (lvPressed[k] ?? 0.0) + profVol
     lvPressedPv[k] = (lvPressedPv[k] ?? 0.0) + profPv
   }
   if withBack && ok {
-    ok = dir > 0.0 ? readProfile(t, L + edge, hi, true) : readProfile(t, lo, L - edge, false)
+    ok = dir > 0.0 ? readProfile(t, L, false, true) : readProfile(t, L, true, false)
     lvBack[k] = (lvBack[k] ?? 0.0) + profVol
   }
   if !withPressed && !withBack { ok = v5.time() == t }
@@ -824,7 +822,7 @@ on p5.close {
                 lvPressedPv[k] = 0.0
                 lvBack[k] = 0.0
                 lvTradeOk[k] = true
-                creditBar(k, dir, t, L, l, h, true, dir > 0.0 ? c > L : c < L)
+                creditBar(k, dir, t, L, true, dir > 0.0 ? c > L : c < L)
                 if dir > 0.0 ? c > L : c < L { lvState[k] = 2 }
               }
             }
@@ -833,7 +831,7 @@ on p5.close {
             let back = dir > 0.0 ? c > L : c < L
             lvBars[k] = (lvBars[k] ?? 0) + 1
             if st == 1 {
-              creditBar(k, dir, t, L, l, h, true, back)
+              creditBar(k, dir, t, L, true, back)
               lvFlowOk[k] = (lvFlowOk[k] ?? false) && flowOk
               lvFlush[k] = dir > 0.0 ? math.min(lvFlush[k] ?? l, l) : math.max(lvFlush[k] ?? h, h)
               lvNew[k] = (lvNew[k] ?? 0.0) + (dir > 0.0 ? math.max(ns, 0.0) : math.max(nl, 0.0))
@@ -854,7 +852,7 @@ on p5.close {
                   lvState[k] = 1
                   // Failed reclaim: discard its back-volume before another attempt.
                   lvBack[k] = 0.0
-                  creditBar(k, dir, t, L, l, h, true, false)
+                  creditBar(k, dir, t, L, true, false)
                   lvFlowOk[k] = (lvFlowOk[k] ?? false) && flowOk
                   lvNew[k] = (lvNew[k] ?? 0.0) + (dir > 0.0 ? math.max(ns, 0.0) : math.max(nl, 0.0))
                   lvStop[k] = liqOk && (lvStop[k] ?? 0.0) >= 0.0 ? (lvStop[k] ?? 0.0) + (dir > 0.0 ? longLiq : shortLiq) : -1.0
@@ -864,7 +862,7 @@ on p5.close {
                   lvState[k] = fixed != 0.0 ? 3 : 0
                 }
               } else {
-                creditBar(k, dir, t, L, l, h, false, true)
+                creditBar(k, dir, t, L, false, true)
                 lvHeld[k] = (lvHeld[k] ?? 0) + 1
                 if (lvHeld[k] ?? 0) >= holdBars {
                   lvState[k] = 3
