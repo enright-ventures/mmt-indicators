@@ -16,10 +16,10 @@ input (
   showY = input.bool(true, title: "Show Yearly (current + previous)")
   input.section(title: "Bands and history")
   bands = input.bool(true, title: "Show focused VWAP +/-1 standard deviation")
-  previousBands = input.bool(true, title: "Previous VWAP VAH/VAL (+/-1 SD) levels")
+  previousBands = input.bool(true, title: "Previous VWAP +/-1 SD levels")
   previous = input.bool(true, title: "Show previous-period VWAP levels")
   history = input.bool(true, title: "Older periods (listed in the levels window)")
-  olderVA = input.select("Quarterly", title: "Value areas and labels on older periods", options: ["Off", "Quarterly", "Quarterly and yearly", "All"], description: "Older periods (before the previous one) also get their VAH/VAL (+/-1 SD) lines and right-edge labels, e.g. 2026 Q1 VAH.")
+  olderVA = input.select("Quarterly", title: "+/-1 SD bands and labels on older periods", options: ["Off", "Quarterly", "Quarterly and yearly", "All"], description: "Older periods (before the previous one) also get their +/-1 SD lines and right-edge labels, e.g. 2026 Q1 +1SD.")
   currentAll = input.bool(false, title: "Current levels for every shown unit", description: "Also draw the current week/month/quarter/year VWAP and +/-1 SD as levels, not only the focused unit's (off = the kScript)")
   weeks = input.int(4, title: "Completed weeks", min: 1, max: 12)
   months = input.int(3, title: "Completed months", min: 1, max: 12)
@@ -27,7 +27,7 @@ input (
   years = input.int(2, title: "Completed years", min: 1, max: 5)
   strict = input.bool(true, title: "Require continuous 24/7 source (disable for session markets)")
   labels = input.bool(true, title: "Show price labels")
-  bandFill = input.bool(true, title: "Faint fill between VAH and VAL")
+  bandFill = input.bool(true, title: "Faint fill between +1 SD and -1 SD")
   input.section(title: "Sources")
   venues = input.exchanges(["binancef", "bybitf"], title: "Venues (pooled)", minSelected: 1, maxSelected: 4, description: "Each venue's candles of the chart's market are pooled. Every venue must cover a period completely for it to count: on MMT, Binance and Bybit futures reach 2022, OKX 2026-01.")
   slowTf = input.timeframe(4h, title: "Quarterly/yearly source", description: "4h as the kScript")
@@ -62,6 +62,9 @@ type Feed {
 }
 
 data chart = subscribe(data.ohlcv)
+// a one-minute clock, live only: the current time, so a venue that has stopped advancing is caught even when its own
+// candles still look continuous
+data clock = subscribe(data.ohlcv, timeframe: 1m, history: 0s)
 // candles the shown periods need: the completed periods asked for, the current one and one of margin
 setup fastBars = math.max(showW ? (weeks + 2) * 336 : 0, showM ? (months + 2) * 1488 : 0, 1000)
 setup slowBars = math.max(showQ ? (quarters + 2) * 92 : 0, showY ? (years + 2) * 366 : 0, 100) * (86400 / time.tfSeconds(slowTf))
@@ -84,6 +87,8 @@ state (
   accs = map<string, Acc>(64)
   done = map<string, Done>(4096)
   closes: int = 0
+  // the end of the last closed clock minute (unix s): now, to the minute, on the live bar
+  clockT: float = 0.0
   drawnAt: int = -1
   older: int = 0
   unavailable: int = 0
@@ -102,11 +107,11 @@ window details = window(title: "Calendar VWAP levels") {
     table.col(title: "Dates (UTC)", width: 1.6),
     table.col(title: "VWAP", align: align.right),
     table.col(title: "SD", align: align.right),
-    table.col(title: "VAH (+1 SD)", align: align.right),
-    table.col(title: "VAL (-1 SD)", align: align.right),
+    table.col(title: "+1 SD", align: align.right),
+    table.col(title: "-1 SD", align: align.right),
     table.col(title: "Status", width: 1.2),
   ], title: "Periods", capacity: 80),
-  // Agent export: current and previous W/M/Q/Y VWAP and SD (VAH = vwap + sd, VAL = vwap - sd) as hidden series for
+  // Agent export: current and previous W/M/Q/Y VWAP and SD (bands at vwap +/- sd) as hidden series for
   // script_get_plot_values, live bar included. Null when a period is incomplete or withheld.
   export: chart.panel(chart),
 }
@@ -279,9 +284,28 @@ fn completedStat(u: int, start: time) -> Stat {
   }
   return pooled(w, s1, q, ok, missing)
 }
-// The period in progress: each venue's accumulator for it plus its forming candle (not yet closed).
-fn currentStat(u: int, start: time) -> Stat {
+on clock.close {
+  let ct = clock.time
+  if ct != null { clockT = float(time.unixSeconds(ct) ?? 0) + 60.0 }
+}
+
+// Now on the live bar: the later of the chart's forming bar and the clock.
+fn liveNow() -> time? {
+  let ct = chart.forming.time ?? chart.time
+  if ct == null { return null }
+  let cs = float(time.unixSeconds(ct) ?? 0)
+  return clockT > cs ? time.fromUnixSeconds(int(clockT) ?? 0) : ct
+}
+
+// The period in progress: each venue's accumulator for it plus its forming candle (not yet closed). The forming candle
+// counts only inside [start, end), so a new period's first candle is never added to the one before. On the live bar
+// (`now` set) every venue's forming candle must be the source candle containing now: a venue whose forming candle is
+// missing, stale, frozen with a continuous-looking last pair, or behind the others makes the period withheld rather
+// than shown from its old accumulator. In history (`now` null) the forming candle is used when present.
+fn currentStat(u: int, start: time, now: time?) -> Stat {
   let b = block(u)
+  let end = time.shiftBars(start, 1, tf: unitTf(u))
+  let expect = now != null ? time.floor(now, u < 2 ? tf("30m") : slowTf) : null
   let w = 0.0
   let s1 = 0.0
   let q = 0.0
@@ -303,10 +327,12 @@ fn currentStat(u: int, start: time) -> Stat {
     let fw = 0.0
     let fmean = 0.0
     let fok = true
-    if ft != null && fh != null && fl != null && fc != null && fv != null && ft >= start && ft > prior {
+    if ft != null && fh != null && fl != null && fc != null && fv != null && ft >= start && ft < end && ft > prior && (expect == null || ft == expect) {
       fok = !strict || ft == prior + b
       fw = fv
       fmean = (fh + fl + fc) / 3.0
+    } else if now != null && has {
+      fok = false
     }
     if !has && fw == 0.0 {
       missing += 1
@@ -390,8 +416,8 @@ fn levels(prefix: string, key: string, u: int, start: time, age: int, from: time
     levelLines.get(prefix, key, "h").set(from, s.mean + s.sigma, to, s.mean + s.sigma, width: 1.0, color: band, style: style, extend: extend.right)
     levelLines.get(prefix, key, "l").set(from, s.mean - s.sigma, to, s.mean - s.sigma, width: 1.0, color: band, style: style, extend: extend.right)
     if labels && (age <= 1 || olderOn(u)) {
-      tags.get(prefix, key, "h").set(8, s.mean + s.sigma, str.format("{0} VAH {1}", name, priceText(s.mean + s.sigma)), color: tint, size: 11, textAlign: "right", zIndex: 5)
-      tags.get(prefix, key, "l").set(8, s.mean - s.sigma, str.format("{0} VAL {1}", name, priceText(s.mean - s.sigma)), color: tint, size: 11, textAlign: "right", zIndex: 5)
+      tags.get(prefix, key, "h").set(8, s.mean + s.sigma, str.format("{0} +1SD {1}", name, priceText(s.mean + s.sigma)), color: tint, size: 11, textAlign: "right", zIndex: 5)
+      tags.get(prefix, key, "l").set(8, s.mean - s.sigma, str.format("{0} -1SD {1}", name, priceText(s.mean - s.sigma)), color: tint, size: 11, textAlign: "right", zIndex: 5)
     }
     if bandFill && age == 1 {
       fills.get(prefix, key).set(from, s.mean + s.sigma, to, s.mean - s.sigma, color: color.withAlpha(tint, 10), extend: extend.right, zIndex: -1)
@@ -433,7 +459,7 @@ fn drawCurrent(now: time, latest: time, m: int) {
   for u in 0..4 {
     if shown(u) && (u == m || currentAll) {
       let start = time.floor(now, unitTf(u))
-      let s = currentStat(u, start)
+      let s = currentStat(u, start, now)
       if s.ok {
         levels("C", str.format("{0}", u), u, start, 0, latest, s, bands, u == m ? shadeFocus : shade(u))
       }
@@ -443,11 +469,14 @@ fn drawCurrent(now: time, latest: time, m: int) {
 }
 
 on chart.update {
-  let t = chart.time
+  // the live bar picks its periods by now (the forming bar or the clock): chart.time is the last confirmed bar, which at
+  // a period rollover (Monday 00:00 UTC, a month's first day) still belongs to the period before
+  let t = chart.isLast ? liveNow() : chart.time
   if t != null {
     let m = mode()
     // the developing focused VWAP along the chart, every period anchored at its own start
-    let s = currentStat(m, time.floor(t, unitTf(m)))
+    let liveT: time? = chart.isLast ? t : null
+    let s = currentStat(m, time.floor(t, unitTf(m)), liveT)
     let live = shown(m) && s.ok
     devLine.plot(live ? s.mean : null)
     devUp.plot(live && bands ? s.mean + s.sigma : null)
@@ -460,13 +489,13 @@ on chart.update {
       let x1 = time.floor(t, unitTf(1))
       let x2 = time.floor(t, unitTf(2))
       let x3 = time.floor(t, unitTf(3))
-      let c0 = currentStat(0, x0)
+      let c0 = currentStat(0, x0, t)
       let q0 = completedStat(0, time.shiftBars(x0, -1, tf: unitTf(0)))
-      let c1 = currentStat(1, x1)
+      let c1 = currentStat(1, x1, t)
       let q1 = completedStat(1, time.shiftBars(x1, -1, tf: unitTf(1)))
-      let c2 = currentStat(2, x2)
+      let c2 = currentStat(2, x2, t)
       let q2 = completedStat(2, time.shiftBars(x2, -1, tf: unitTf(2)))
-      let c3 = currentStat(3, x3)
+      let c3 = currentStat(3, x3, t)
       let q3 = completedStat(3, time.shiftBars(x3, -1, tf: unitTf(3)))
       xWVwap.plot(c0.ok ? c0.mean : null)
       xWSd.plot(c0.ok ? c0.sigma : null)

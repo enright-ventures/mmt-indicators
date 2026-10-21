@@ -12,7 +12,6 @@ The full reference, with a visual key for every line and marker, is [`docs/sword
 | Path | What it is |
 |---|---|
 | [`indicators/swordfish/`](indicators/swordfish) | The six Swordfish indicators (below) |
-| [`indicators/other/`](indicators/other) | Earlier stand-alone scripts kept as they are in MMT: Value Area Levels, OI Delta, Positioning NL/NS/OI, Delta Footprint |
 | [`tools/`](tools) | TradingView watchlist importer and the source of the "Import to MMT" Mac app |
 | [`docs/swordfish-guide.html`](docs/swordfish-guide.html) | The guide: what each indicator draws, how to read it, settings, data and checks |
 | [`validation/`](validation) | Reference implementations, cross-checks and backtests, with results in [`validation/README.md`](validation/README.md) |
@@ -22,7 +21,7 @@ The full reference, with a visual key for every line and marker, is [`docs/sword
 | Script | Draws | Data |
 |---|---|---|
 | **Swordfish Composites v2** (`swordfish-composites.m5`) | TPO value areas of balanced days or weeks, merged when they overlap by 50%; POC, VAH, VAL extended as levels | 30m candles, Binance perps |
-| **Swordfish Calendar VWAP** (`swordfish-calendar-vwap.m5`) | Weekly, monthly, quarterly and yearly VWAPs with ±1 SD (VAH/VAL), current, previous and older periods, labelled (e.g. `2026 Q1 VAH`) | 30m (W/M) and 4h (Q/Y) candles, Binance + Bybit perps pooled |
+| **Swordfish Calendar VWAP** (`swordfish-calendar-vwap.m5`) | Weekly, monthly, quarterly and yearly VWAPs with ±1 standard deviation bands, current, previous and older periods, labelled (e.g. `2026 Q1 +1SD`; not value areas, which Composites draw) | 30m (W/M) and 4h (Q/Y) candles, Binance + Bybit perps pooled |
 | **Swordfish Rolling VWAP** (`swordfish-rolling-vwap.m5`) | Trailing 7D, 30D and 365D VWAPs | 30m and daily candles, Binance + Bybit perps pooled |
 | **Swordfish Delta Heat** (`swordfish-delta-heat.m5`) | A delta ladder on every candle: net aggressive buying or selling per price row, in dollars, length relative to the candle's largest row, colour against a typical bar | MMT volume snapshots, Binance + Bybit + OKX perps |
 | **Swordfish Offside** (`swordfish-offside.m5`) | Failed breakdowns and breakouts, measured from individual trades (pressed size, average fill, large prints, reclaim volume) with break-flow and counterflow proxies; delta divergences, reaction zones and flow-weighted prices | Trades (MMT Ultra), 5m candles, open interest and liquidations; Binance, Bybit and OKX perps |

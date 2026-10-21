@@ -167,17 +167,17 @@ html { scroll-behavior: smooth; }
 </dl>
 
 <h2 id="calvwap">Swordfish Calendar VWAP</h2>
-<p class="tagline">VWAPs anchored to calendar periods, with ±1 standard deviation as value-area edges.</p>
+<p class="tagline">VWAPs anchored to calendar periods, with ±1σ (one standard deviation) bands.</p>
 <dl class="rows">
-  <dt>Draws</dt><dd>The focused period's developing VWAP with a ±1 SD band (weekly on this chart). The current and previous week, month, quarter and year as levels, each with VAH and VAL (+1 and −1 SD). Older quarters keep their value areas with labels such as <code>2026 Q1 VAH</code>. A levels window (badge beside the name) lists every period.</dd>
-  <dt>Method</dt><dd>HLC3 × volume, Binance and Bybit perps pooled into one weighted mean and variance. Week and month use 30m candles; quarter and year use 4h. A period is withheld unless every pooled exchange's data starts at the period start with no gaps. Both exchanges reach 2022 on MMT; OKX (from Jan 2026) and Hyperliquid (from Mar 2025) are left out so older periods stay complete.</dd>
-  <dt>Read it</dt><dd>The VWAP is the average price paid in the period. Price above a period's VWAP means its average buyer is in profit and its average seller is not. The ±1 SD lines mark the edges of that period's value.</dd>
-  <dt>Settings</dt><dd><code>Panel anchor</code> (Weekly here), which units to show, <code>Value areas and labels on older periods</code> (All here), completed periods kept, venues pooled.</dd>
+  <dt>Draws</dt><dd>The focused period's developing VWAP with a ±1 SD band (weekly on this chart). The current and previous week, month, quarter and year as levels, each with ±1σ bands, labelled <code>+1SD</code> and <code>-1SD</code> on the chart. Older quarters keep their bands with labels such as <code>2026 Q1 +1SD</code>. These are standard-deviation bands around the VWAP, not value areas (Composites draw the TPO value areas). A levels window (badge beside the name) lists every period.</dd>
+  <dt>Method</dt><dd>HLC3 × volume, Binance and Bybit perps pooled into one weighted mean and variance. Week and month use 30m candles; quarter and year use 4h. A period is withheld unless every pooled exchange's data starts at the period start with no gaps. Both exchanges reach 2022 on MMT; OKX (from Jan 2026) is left out so older periods stay complete.</dd>
+  <dt>Read it</dt><dd>The VWAP is the average price paid in the period. Price above a period's VWAP means its average buyer is in profit and its average seller is not. The ±1σ lines mark one standard deviation of the period's prices around its VWAP: outside them, price is stretched relative to the period's average. The developing period is drawn from the forming candle's period, so a new week starts at Monday 00:00 UTC, and it is withheld if a venue's forming candle is missing, stale, or not the current candle (checked against a one-minute clock, so a feed that stops advancing is caught).</dd>
+  <dt>Settings</dt><dd><code>Panel anchor</code> (Weekly here), which units to show, <code>+/-1 SD bands and labels on older periods</code> (All here), completed periods kept, venues pooled.</dd>
   <dt>Checked</dt><dd>Binance only: within 0.01% of Binance's own data, including the 2024 yearly VWAP (3,063.02 on ETH, where OpenMarket's data had been wrong). Pooled: this week's VWAP 82,736.90 vs 82,736.97 from Binance and Bybit's own candles, ±1 SD within 7 cents.</dd>
 </dl>
 
 <h2 id="rvwap">Swordfish Rolling VWAP</h2>
-<p>The forming candle is included within each window: 335/1,439 closed 30m candles plus the forming candle, or 364 closed daily candles plus the forming day. The windows are candle-aligned.</p>
+<p>The forming candle is included within each window: 335/1,439 closed 30m candles plus the forming candle, or 364 closed daily candles plus the forming day. A window shows only when its candles are consecutive on every pooled venue, so a missing candle can never stretch "7D" over more than seven days; after a gap in the exchange data the line returns once a full gap-free window has built up. On the live bar each venue's forming candle must follow its last closed one and be the current candle (checked against a one-minute clock and the chart's forming bar), and the venues must end on the same candle.</p>
 <p class="tagline">7-day, 30-day and 365-day candle-aligned VWAPs, including the forming candle within the stated candle count.</p>
 <dl class="rows">
   <dt>Draws</dt><dd>7D and 30D as dashed lines, 365D as a thinner solid white line, each named at the right edge.</dd>
@@ -203,6 +203,7 @@ html { scroll-behavior: smooth; }
   <dt>Scale</dt><dd>Length is relative to the candle's own largest row, which runs full length and is outlined. Colour strength compares across candles: full colour at 2× a typical bar's largest row (the average over the last 200 bars), so a quiet candle's biggest row is full length but pale.</dd>
   <dt>Data</dt><dd>MMT's per-bar volume snapshots, summed over Binance, Bybit and OKX perps. These cover about the last 1,000 bars (21 days on 30m). The live bar is rebuilt from completed one-minute snapshots, so it is at most a minute behind.</dd>
   <dt>Read it</dt><dd>Heavy buying at the top of a bar that closed lower means buyers paid up and got rejected. Offside turns that into a marker.</dd>
+  <dt>Live bar</dt><dd>Rebuilt from MMT's completed one-minute snapshots since the bar opened. A missing minute (no trades, or no data) is skipped rather than ending the rebuild, so earlier minutes are kept, and the title shows the shortfall, e.g. "live ladder: 28 of 30 minutes". The closed bar's own snapshot replaces the rebuild when the bar closes.</dd>
 </dl>
 
 <h2 id="offside">Swordfish Offside</h2>

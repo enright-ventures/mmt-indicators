@@ -8,7 +8,8 @@ script "Swordfish Delta Heat"
 // chart's candle runs as a thin strip at the bar's left edge. Dollars, so the scale reads the same on any coin.
 // Closed bars come from MMT's per-bar volume snapshots (the last 250 bars). MMT has no forming bar snapshot, so the
 // live bar is built from the completed one-minute snapshots since it opened (exact per row, at most a minute behind,
-// from any load time) and redrawn as each minute closes; when the bar closes, its own snapshot replaces that. (No live
+// from any load time) and redrawn as each minute closes; when the bar closes, its own snapshot replaces that. A missing
+// minute is skipped rather than ending the rebuild, and the title shows how many of the bar's minutes were found. (No live
 // trade tapes: they count against MMT's live-feed limit.)
 // When the auto row size changes, every bar with a snapshot is redrawn at the new size, so all ladders on screen share
 // one row height, and the colour scale is rebuilt from their largest rows at that size.
@@ -51,6 +52,9 @@ state (
   ranges = rolling<float>(100)
   step: float = 0.0
   lastDrawn: time? = null
+  // the live bar's minute snapshots found and minutes elapsed, for the title (a shortfall is marked, not hidden)
+  liveGot: int = 0
+  liveWant: int = 0
   // each kept bar's largest row at the current row size, newest first, for rebuilding the colour scale on a resize
   resized = float[](1000)
 )
@@ -93,12 +97,16 @@ on clock.close {
     let more = true
     let sums = map<int, float>(2048)
     let vols = map<int, float>(2048)
+    // every minute snapshot back to the bar's open: a missing minute (no trades, or no data) is skipped, not the end,
+    // so earlier minutes are never discarded
+    let got = 0
     for back in 0..span {
       if more {
         let b = minutes.bucketsByStep(step, barsAgo: back)
-        if b == null || (b != null && float(time.unixSeconds(b.time) ?? 0) < barU) {
+        if b != null && float(time.unixSeconds(b.time) ?? 0) < barU {
           more = false
         } else if b != null {
+          got += 1
           for i in 0..b.len {
             let c = b.get(i)
             if c != null && c.total > 0.0 {
@@ -113,6 +121,8 @@ on clock.close {
         }
       }
     }
+    liveGot = got
+    liveWant = int(math.floor((float(time.unixSeconds(mt) ?? 0) - barU) / 60.0)) + 1 ?? got
     if highRow >= lowRow {
       let rows = int(highRow - lowRow) ?? 0
       let biggest = 0.0
@@ -171,7 +181,8 @@ fn drawSnapshot(back: int, ref: float, draw: bool) -> float {
 // Closed bars: the volume snapshot, once per bar.
 on chart.update {
   if chart.isLast {
-    script.setTitle(liveSupported ? "Swordfish Delta Heat | live ladder up to 1m behind" : "Swordfish Delta Heat | closed bars only; live ladder needs whole-minute 1m-4h charts")
+    let liveText = liveWant > liveGot ? str.format("live ladder: {0} of {1} minutes (missing minutes: no trades or no data)", liveGot, liveWant) : "live ladder up to 1m behind"
+    script.setTitle(liveSupported ? str.concat("Swordfish Delta Heat | ", liveText) : "Swordfish Delta Heat | closed bars only; live ladder needs whole-minute 1m-4h charts")
   }
 }
 
