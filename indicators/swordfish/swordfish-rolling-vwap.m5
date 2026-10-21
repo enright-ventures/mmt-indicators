@@ -32,6 +32,8 @@ data (
   bnD = subscribe(data.ohlcv, exchange: "binancef", timeframe: 1D, history: 800)
   bbM = subscribe(data.ohlcv, exchange: "bybitf", timeframe: 30m, history: 4000)
   bbD = subscribe(data.ohlcv, exchange: "bybitf", timeframe: 1D, history: 800)
+  // a one-minute clock, live only: the current time, so venues that stop advancing together are caught
+  clock = subscribe(data.ohlcv, timeframe: 1m, history: 0s)
 )
 
 plot (
@@ -75,6 +77,8 @@ state (
   aRunD: int = 0
   bLastD: float = 0.0
   bRunD: int = 0
+  // the end of the last closed clock minute (unix s)
+  clockT: float = 0.0
   tags = entities.labelPool(max: 3, anchor: anchor.right)
 )
 
@@ -83,9 +87,14 @@ fn secs(t: time?) -> float {
   return float(time.unixSeconds(t) ?? 0)
 }
 
-// The forming candle directly follows the last closed one.
-fn fresh(ft: time?, last: float, period: float) -> bool {
-  return ft != null && last > 0.0 && secs(ft) == last + period
+// The forming candle directly follows the last closed one and is the source candle containing now.
+fn fresh(ft: time?, last: float, period: float, now: float) -> bool {
+  return ft != null && last > 0.0 && secs(ft) == last + period && secs(ft) == math.floor(now / period) * period
+}
+
+on clock.close {
+  let ct = clock.time
+  if ct != null { clockT = secs(ct) + 60.0 }
 }
 
 // HLC3 x volume, or null for an incomplete candle.
@@ -193,9 +202,11 @@ fn pooled(fullA: bool, spvA: float, svA: float, fpvA: float?, fvA: float?, fullB
 
 on chart.update {
   let live = chart.isLast
-  // on the live bar both venues must have a forming candle right after their last closed one, on the same candle
-  let liveM = !live || ((!useBn || fresh(bnM.forming.time, aLastM, 1800.0)) && (!useBb || fresh(bbM.forming.time, bLastM, 1800.0)) && (!useBn || !useBb || aLastM == bLastM))
-  let liveD = !live || ((!useBn || fresh(bnD.forming.time, aLastD, 86400.0)) && (!useBb || fresh(bbD.forming.time, bLastD, 86400.0)) && (!useBn || !useBb || aLastD == bLastD))
+  // on the live bar every used venue's forming candle must follow its last closed one and contain now (the later of
+  // the chart's forming bar and the clock), so a venue, or both together, that has stopped advancing is withheld
+  let now = math.max(secs(chart.forming.time), clockT)
+  let liveM = !live || ((!useBn || fresh(bnM.forming.time, aLastM, 1800.0, now)) && (!useBb || fresh(bbM.forming.time, bLastM, 1800.0, now)) && (!useBn || !useBb || aLastM == bLastM))
+  let liveD = !live || ((!useBn || fresh(bnD.forming.time, aLastD, 86400.0, now)) && (!useBb || fresh(bbD.forming.time, bLastD, 86400.0, now)) && (!useBn || !useBb || aLastD == bLastD))
   let fa = bnM.forming
   let fb = bbM.forming
   let ga = bnD.forming

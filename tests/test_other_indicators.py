@@ -34,13 +34,17 @@ POOLED = """function pooled(w, s1, q, ok, missing) {
   return {ok: ok && missing == 0 && w > 0, w, mean, sigma: w > 0 ? Math.sqrt(Math.max(0, q / w - mean * mean)) : 0, missing};
 }
 function block(u) { return u < 2 ? 1800 : 14400; }
-function unitTf(u) { return 604800; }"""
+function unitTf(u) { return 604800; }
+function tf(s) { return {"30m": 1800, "4h": 14400}[s]; }"""
 
 
-def calendar(acc, forming, calls):
+def calendar(acc, forming, calls, more=()):
+    """One venue (binancef) by default; `more` adds (exchange, accumulator, forming) venues."""
+    venues = [("binancef", acc, forming), *more]
     spec = {"blocks": ["fn accKey(", "fn currentStat("], "stubs": [POOLED],
-            "context": {"strict": True, "accs": {"map": {"binancef|0": acc}},
-                        "feeds": {"pairs": [["binancef", {"fast": {"forming": forming}, "slow": {"forming": {}}}]]}},
+            "context": {"strict": True, "slowTf": 14400,
+                        "accs": {"map": {f"{ex}|0": a for ex, a, _ in venues}},
+                        "feeds": {"pairs": [[ex, {"fast": {"forming": f}, "slow": {"forming": {}}}] for ex, _, f in venues]}},
             "calls": calls}
     return run("swordfish-calendar-vwap.m5", spec)["results"]
 
@@ -49,16 +53,16 @@ def test_a_new_weeks_forming_candle_is_not_added_to_the_week_before():
     # Last week's accumulator: 100 volume at 100, last candle Sunday 23:30. Monday's first forming candle: 100 at 200.
     acc = {"start": PREV_MONDAY, "prior": MONDAY - 1800, "w": 100, "mean": 100, "m2": 0, "ok": True}
     forming = {"time": MONDAY, "high": 200, "low": 200, "close": 200, "volume": 100}
-    last_week, this_week = calendar(acc, forming, [{"fn": "currentStat", "args": [0, PREV_MONDAY, False]},
-                                                   {"fn": "currentStat", "args": [0, MONDAY, True]}])
+    last_week, this_week = calendar(acc, forming, [{"fn": "currentStat", "args": [0, PREV_MONDAY, None]},
+                                                   {"fn": "currentStat", "args": [0, MONDAY, MONDAY]}])
     assert last_week["ok"] and last_week["mean"] == 100 and last_week["sigma"] == 0
     assert this_week["ok"] and this_week["mean"] == 200
 
 
 def test_a_missing_forming_candle_withholds_the_live_period():
     acc = {"start": MONDAY, "prior": MONDAY + 1800, "w": 100, "mean": 100, "m2": 0, "ok": True}
-    live, history = calendar(acc, {}, [{"fn": "currentStat", "args": [0, MONDAY, True]},
-                                       {"fn": "currentStat", "args": [0, MONDAY, False]}])
+    live, history = calendar(acc, {}, [{"fn": "currentStat", "args": [0, MONDAY, MONDAY + 3600]},
+                                       {"fn": "currentStat", "args": [0, MONDAY, None]}])
     assert not live["ok"]
     assert history["ok"] and history["mean"] == 100
 
@@ -67,8 +71,39 @@ def test_a_stale_forming_candle_withholds_the_live_period():
     # The venue's forming candle is the one already closed: it has stopped advancing.
     acc = {"start": MONDAY, "prior": MONDAY + 1800, "w": 100, "mean": 100, "m2": 0, "ok": True}
     forming = {"time": MONDAY + 1800, "high": 101, "low": 99, "close": 100, "volume": 5}
-    live, = calendar(acc, forming, [{"fn": "currentStat", "args": [0, MONDAY, True]}])
+    live, = calendar(acc, forming, [{"fn": "currentStat", "args": [0, MONDAY, MONDAY + 3600]}])
     assert not live["ok"]
+
+
+def candle(t, price=100, volume=10):
+    return {"time": t, "high": price, "low": price, "close": price, "volume": volume}
+
+
+def test_a_venue_lagging_behind_now_withholds_the_live_period():
+    # PR #4 review: at 03:00 Binance is current; Bybit's last closed candle is 00:00 and its forming 00:30, a pair that
+    # looks continuous on its own but is 150 minutes behind.
+    now = MONDAY + 3 * 3600
+    bn = {"start": MONDAY, "prior": now - 1800, "w": 100, "mean": 100, "m2": 0, "ok": True}
+    bb = {"start": MONDAY, "prior": MONDAY, "w": 100, "mean": 125, "m2": 0, "ok": True}
+    live, = calendar(bn, candle(now), [{"fn": "currentStat", "args": [0, MONDAY, now]}],
+                     more=[("bybitf", bb, candle(MONDAY + 1800, 125))])
+    assert not live["ok"]
+
+
+def test_a_frozen_single_venue_withholds_the_live_period():
+    now = MONDAY + 3 * 3600
+    acc = {"start": MONDAY, "prior": MONDAY, "w": 100, "mean": 100, "m2": 0, "ok": True}
+    live, = calendar(acc, candle(MONDAY + 1800), [{"fn": "currentStat", "args": [0, MONDAY, now]}])
+    assert not live["ok"]
+
+
+def test_current_venues_show_the_live_period():
+    now = MONDAY + 3 * 3600
+    bn = {"start": MONDAY, "prior": now - 1800, "w": 100, "mean": 100, "m2": 0, "ok": True}
+    bb = {"start": MONDAY, "prior": now - 1800, "w": 100, "mean": 100, "m2": 0, "ok": True}
+    live, = calendar(bn, candle(now), [{"fn": "currentStat", "args": [0, MONDAY, now]}],
+                     more=[("bybitf", bb, candle(now))])
+    assert live["ok"] and live["mean"] == 100
 
 
 # ---------------------------------------------------------------- Rolling VWAP
@@ -91,9 +126,10 @@ function live(t) {
 }"""
 
 
-def rolling(spacing, count=335):
-    context = {"useBn": True, "useBb": True, "show7": True, "show30": False, "show365": False, "labels": False,
-               "chart": {"isLast": True}}
+def rolling(spacing, count=335, chart_ahead=0, single=False):
+    """`chart_ahead`: how many 30m intervals the chart's forming bar is past the source's forming candle."""
+    context = {"useBn": True, "useBb": not single, "show7": True, "show30": False, "show365": False, "labels": False,
+               "clockT": 0.0}
     for p in "ab":
         for n, cap in (("7", 335), ("30", 1439), ("365", 364)):
             context[f"{p}Pv{n}"] = {"rolling": cap}
@@ -104,6 +140,7 @@ def rolling(spacing, count=335):
             context[f"{p}Last{s}"] = 0.0
             context[f"{p}Run{s}"] = 0
     times = [MONDAY + i * spacing for i in range(count)]
+    context["chart"] = {"isLast": True, "forming": {"time": times[-1] + 1800 * (1 + chart_ahead)}}
     spec = {"blocks": ["fn pvOf(", "fn secs(", "fn fresh(", "fn pooled(", "on bnM.close {", "on bbM.close {",
                        "on chart.update {"],
             "stubs": [FEED], "context": context, "recorders": ["line7", "line30", "line365"],
@@ -118,6 +155,16 @@ def test_seven_day_window_shows_when_its_candles_are_consecutive():
 def test_seven_day_window_is_withheld_when_candles_are_missing():
     # 335 candles an hour apart span about 14 days: not a 7-day VWAP.
     assert rolling(3600) is None
+
+
+def test_venues_frozen_together_are_withheld():
+    # PR #4 review: both venues' last closed/forming pairs agree, but the chart has moved a 30m interval past them.
+    assert rolling(1800, chart_ahead=1) is None
+
+
+def test_a_stale_single_venue_is_withheld():
+    assert rolling(1800, single=True) == 100
+    assert rolling(1800, chart_ahead=1, single=True) is None
 
 
 # ---------------------------------------------------------------- Delta Heat

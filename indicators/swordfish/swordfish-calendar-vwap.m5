@@ -62,6 +62,9 @@ type Feed {
 }
 
 data chart = subscribe(data.ohlcv)
+// a one-minute clock, live only: the current time, so a venue that has stopped advancing is caught even when its own
+// candles still look continuous
+data clock = subscribe(data.ohlcv, timeframe: 1m, history: 0s)
 // candles the shown periods need: the completed periods asked for, the current one and one of margin
 setup fastBars = math.max(showW ? (weeks + 2) * 336 : 0, showM ? (months + 2) * 1488 : 0, 1000)
 setup slowBars = math.max(showQ ? (quarters + 2) * 92 : 0, showY ? (years + 2) * 366 : 0, 100) * (86400 / time.tfSeconds(slowTf))
@@ -84,6 +87,8 @@ state (
   accs = map<string, Acc>(64)
   done = map<string, Done>(4096)
   closes: int = 0
+  // the end of the last closed clock minute (unix s): now, to the minute, on the live bar
+  clockT: float = 0.0
   drawnAt: int = -1
   older: int = 0
   unavailable: int = 0
@@ -279,13 +284,28 @@ fn completedStat(u: int, start: time) -> Stat {
   }
   return pooled(w, s1, q, ok, missing)
 }
+on clock.close {
+  let ct = clock.time
+  if ct != null { clockT = float(time.unixSeconds(ct) ?? 0) + 60.0 }
+}
+
+// Now on the live bar: the later of the chart's forming bar and the clock.
+fn liveNow() -> time? {
+  let ct = chart.forming.time ?? chart.time
+  if ct == null { return null }
+  let cs = float(time.unixSeconds(ct) ?? 0)
+  return clockT > cs ? time.fromUnixSeconds(int(clockT) ?? 0) : ct
+}
+
 // The period in progress: each venue's accumulator for it plus its forming candle (not yet closed). The forming candle
-// counts only inside [start, end), so a new period's first candle is never added to the one before. At the live edge
-// (`live`) a venue whose forming candle is missing, stale (not after its last closed candle) or outside the period is
-// not current, so the period is withheld rather than shown from the old accumulator alone.
-fn currentStat(u: int, start: time, live: bool) -> Stat {
+// counts only inside [start, end), so a new period's first candle is never added to the one before. On the live bar
+// (`now` set) every venue's forming candle must be the source candle containing now: a venue whose forming candle is
+// missing, stale, frozen with a continuous-looking last pair, or behind the others makes the period withheld rather
+// than shown from its old accumulator. In history (`now` null) the forming candle is used when present.
+fn currentStat(u: int, start: time, now: time?) -> Stat {
   let b = block(u)
   let end = time.shiftBars(start, 1, tf: unitTf(u))
+  let expect = now != null ? time.floor(now, u < 2 ? tf("30m") : slowTf) : null
   let w = 0.0
   let s1 = 0.0
   let q = 0.0
@@ -307,11 +327,11 @@ fn currentStat(u: int, start: time, live: bool) -> Stat {
     let fw = 0.0
     let fmean = 0.0
     let fok = true
-    if ft != null && fh != null && fl != null && fc != null && fv != null && ft >= start && ft < end && ft > prior {
+    if ft != null && fh != null && fl != null && fc != null && fv != null && ft >= start && ft < end && ft > prior && (expect == null || ft == expect) {
       fok = !strict || ft == prior + b
       fw = fv
       fmean = (fh + fl + fc) / 3.0
-    } else if live && has {
+    } else if now != null && has {
       fok = false
     }
     if !has && fw == 0.0 {
@@ -439,7 +459,7 @@ fn drawCurrent(now: time, latest: time, m: int) {
   for u in 0..4 {
     if shown(u) && (u == m || currentAll) {
       let start = time.floor(now, unitTf(u))
-      let s = currentStat(u, start, true)
+      let s = currentStat(u, start, now)
       if s.ok {
         levels("C", str.format("{0}", u), u, start, 0, latest, s, bands, u == m ? shadeFocus : shade(u))
       }
@@ -449,13 +469,14 @@ fn drawCurrent(now: time, latest: time, m: int) {
 }
 
 on chart.update {
-  // the live bar picks its periods by the forming candle's time: chart.time is the last confirmed bar, which at a period
-  // rollover (Monday 00:00 UTC, a month's first day) still belongs to the period before
-  let t = chart.isLast ? chart.forming.time ?? chart.time : chart.time
+  // the live bar picks its periods by now (the forming bar or the clock): chart.time is the last confirmed bar, which at
+  // a period rollover (Monday 00:00 UTC, a month's first day) still belongs to the period before
+  let t = chart.isLast ? liveNow() : chart.time
   if t != null {
     let m = mode()
     // the developing focused VWAP along the chart, every period anchored at its own start
-    let s = currentStat(m, time.floor(t, unitTf(m)), chart.isLast)
+    let liveT: time? = chart.isLast ? t : null
+    let s = currentStat(m, time.floor(t, unitTf(m)), liveT)
     let live = shown(m) && s.ok
     devLine.plot(live ? s.mean : null)
     devUp.plot(live && bands ? s.mean + s.sigma : null)
@@ -468,13 +489,13 @@ on chart.update {
       let x1 = time.floor(t, unitTf(1))
       let x2 = time.floor(t, unitTf(2))
       let x3 = time.floor(t, unitTf(3))
-      let c0 = currentStat(0, x0, true)
+      let c0 = currentStat(0, x0, t)
       let q0 = completedStat(0, time.shiftBars(x0, -1, tf: unitTf(0)))
-      let c1 = currentStat(1, x1, true)
+      let c1 = currentStat(1, x1, t)
       let q1 = completedStat(1, time.shiftBars(x1, -1, tf: unitTf(1)))
-      let c2 = currentStat(2, x2, true)
+      let c2 = currentStat(2, x2, t)
       let q2 = completedStat(2, time.shiftBars(x2, -1, tf: unitTf(2)))
-      let c3 = currentStat(3, x3, true)
+      let c3 = currentStat(3, x3, t)
       let q3 = completedStat(3, time.shiftBars(x3, -1, tf: unitTf(3)))
       xWVwap.plot(c0.ok ? c0.mean : null)
       xWSd.plot(c0.ok ? c0.sigma : null)

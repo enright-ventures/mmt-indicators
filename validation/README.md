@@ -9,7 +9,9 @@ A second review of 8940957 covered the other indicators. Each fix has a test in 
 - Calendar VWAP's +/-1 standard deviation bands are renamed from VAH/VAL to +1SD/-1SD (ASCII in the scripts; the guide writes ±1σ), as are Offside's optional VWAP trap levels, so they are not confused with Composites' TPO value areas.
 - The older stand-alone scripts (Positioning NL/NS, OI Delta, Value Area Levels, Delta Footprint) are removed from the repo: they are not on the Swordfish v2 workspace and their roles are covered by Bar Stats, MMT's Open Interest pane, Composites/Calendar VWAP and Delta Heat. Their review findings were therefore not fixed.
 
-Full suite: 62 passed. MMT `script_check` passes for Calendar VWAP, Rolling VWAP, Delta Heat and Offside.
+PR #4 review follow-up: continuity alone let a feed that stopped advancing, or both venues together, pass (a Bybit pair 150 minutes behind still pooled; frozen venues still plotted 7D). Calendar and Rolling VWAP now subscribe to a live one-minute clock; on the live bar every selected venue's forming candle must be the source candle containing now (the later of the clock and the chart's forming bar). Four new tests (lagging venue, frozen single venue, jointly frozen venues, stale single venue) fail on a53b547 and pass now. Limitation: if the chart's own market also stops updating, there is no independent clock to compare against.
+
+Full suite: 67 passed. MMT `script_check` passes for Calendar VWAP, Rolling VWAP, Delta Heat and Offside.
 
 ## Offside review fixes (2026-10-21)
 
