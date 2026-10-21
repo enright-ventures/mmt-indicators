@@ -93,6 +93,9 @@ side is described at the bottom right; every trap is in the script's "Recent tra
   one-minute returns: −15 bp vs +15 bp.
 - Rolling VWAP uses 335/1,439 closed 30m candles plus the forming candle, and 364 closed days plus the forming day. These are candle-aligned windows, not an exact intrabar trailing duration.
 - Delta Heat's live ladder supports whole-minute charts from 1m through 4h. Other timeframes explicitly show closed bars only.
+  The minute in progress comes from MMT's live trade feed (no trade history is loaded), so the current candle's ladder
+  updates about once a second. Right after a page reload MMT can deliver the one-minute snapshot history a few minutes
+  short of the live stream; the title then shows the shortfall until the bar closes.
 - MMT keeps per-price volume snapshots for about the last 1,000 bars. The ladder, the reaction zones and the old wick
   markers only exist for that span.
 - Offside's trap detection looks back 5 days of 5m bars. Its 4h swing levels use about 50 days of 4h bars.

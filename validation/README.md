@@ -1,3 +1,9 @@
+## Delta Heat: real-time current candle (2026-10-22)
+
+The live ladder was rebuilt only at each minute close from MMT's one-minute snapshots, so the current candle lagged by up to a minute and appeared up to a minute after loading. MMT has no forming volume profile, so the minute in progress now comes from live trades (history 0s, Binance/Bybit/OKX or the chart venue), bucketed on the ladder's row grid, kept for the two most recent minutes and dropped once that minute's snapshot exists, so no minute is counted twice. Redraws happen on trades, at most once a second, and at each minute close.
+
+Live MMT (BTC/USD 30m): the test copy drew 8 s after being added and redrew about once a second. On a settled tab, over two bars, every completed minute's snapshot was found plus the live minute ("live ladder in real time"). An earlier run on a tab that had just been reloaded several times found minutes 1-8 of the bar missing; a probe later found all 1,440 one-minute snapshots of the preceding 24 hours present, including those minutes. So MMT's one-minute history can arrive a few minutes short of the live stream right after a reload and does not refill in that session; the title reports the shortfall until the bar closes. Filling it would mean loading recent trade history again, which was not done. Three tests cover the live minute, the snapshot handover without double counting, and the once-a-second limit.
+
 ## Offside: volume profiles instead of trades (2026-10-22)
 
 Offside loaded 12 hours of individual trades (about 1 million on BTC across three perps) to measure a few dozen 5m bars a day; cold starts took 6 to 14 minutes and coincided with MMT's script-memory errors. A cold-load test showed the time is the first download of trade history: a different size minimum loaded in 15 s once the trades were cached, so raising the minimum would not have helped. Trades of $5,000+ were 96% of Binance's loaded volume, 93% of OKX's and 86% of Bybit's.
