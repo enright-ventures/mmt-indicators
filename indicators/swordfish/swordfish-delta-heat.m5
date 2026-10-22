@@ -105,8 +105,8 @@ fn row(lo: float, hi: float, usd: float, ref: float, biggest: float, strongest: 
   }
 }
 
-// The live bar at second `sec`: completed minutes from MMT's one-minute snapshots, plus live trades for the minutes
-// after the newest snapshot (the minute in progress has no snapshot; the one just closed may not have one yet).
+// The live bar at second `sec`: completed minutes from MMT's one-minute snapshots, plus live trades for any buffered
+// minute without its own snapshot (the minute in progress has none; the one just closed, or a skipped one, may not).
 fn drawLive(sec: float) {
   if !liveSupported || step <= 0.0 { return }
   let tf = float(tfSeconds)
@@ -122,7 +122,8 @@ fn drawLive(sec: float) {
   // every minute snapshot back to the bar's open: a missing minute (no trades, or no data) is skipped, not the end,
   // so earlier minutes are never discarded
   let got = 0
-  let newest = -1.0
+  // the minutes (unix s / 60) that have a snapshot: a buffered minute is replaced only by its own snapshot
+  let seen = map<int, bool>(512)
   for back in 0..span {
     if more {
       let b = minutes.bucketsByStep(step, barsAgo: back)
@@ -131,7 +132,7 @@ fn drawLive(sec: float) {
         more = false
       } else if b != null {
         got += 1
-        newest = math.max(newest, bt)
+        seen.set(int(bt / 60.0) ?? 0, true)
         for i in 0..b.len {
           let c = b.get(i)
           if c != null && c.total > 0.0 {
@@ -146,8 +147,8 @@ fn drawLive(sec: float) {
       }
     }
   }
-  // live trades for minutes of this bar after the newest snapshot
-  if tStep == step && tm0 >= barU && tm0 < barU + tf && tm0 > newest {
+  // live trades for minutes of this bar that have no snapshot of their own (yet)
+  if tStep == step && tm0 >= barU && tm0 < barU + tf && !seen.has(int(tm0 / 60.0) ?? 0) {
     got += 1
     for k in tk0 {
       if k != null {
@@ -158,7 +159,7 @@ fn drawLive(sec: float) {
       }
     }
   }
-  if tStep == step && tm1 >= barU && tm1 < barU + tf && tm1 > newest {
+  if tStep == step && tm1 >= barU && tm1 < barU + tf && !seen.has(int(tm1 / 60.0) ?? 0) {
     got += 1
     for k in tk1 {
       if k != null {
@@ -194,7 +195,8 @@ fn drawLive(sec: float) {
   }
 }
 
-// One live trade into its minute's slot; the ladder is redrawn at most once a second.
+// One live trade into its minute's slot; the ladder is redrawn at most once a second. A slot only moves forward: a late
+// trade for a minute older than the one its slot holds is dropped rather than clearing the newer minute.
 fn onLiveTrade(p: float, sz: float, buy: bool, tt: time) {
   if !liveSupported || step <= 0.0 || !(p > 0.0) || !(sz > 0.0) { return }
   if tStep != step {
@@ -208,6 +210,7 @@ fn onLiveTrade(p: float, sz: float, buy: bool, tt: time) {
   let r = int(math.floor(p / step)) ?? 0
   let net = buy ? sz : -sz
   if math.floor(m / 60.0) - math.floor(m / 120.0) * 2.0 == 0.0 {
+    if m < tm0 { return }
     if tm0 != m {
       td0.clear()
       tv0.clear()
@@ -218,6 +221,7 @@ fn onLiveTrade(p: float, sz: float, buy: bool, tt: time) {
     td0.set(r, (td0.get(r) ?? 0.0) + net)
     tv0.set(r, (tv0.get(r) ?? 0.0) + sz)
   } else {
+    if m < tm1 { return }
     if tm1 != m {
       td1.clear()
       tv1.clear()
