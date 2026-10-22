@@ -181,12 +181,87 @@ function drawn() { return rows; }"""
 
 
 def test_live_ladder_keeps_minutes_before_a_missing_one_and_reports_coverage():
-    spec = {"blocks": ["on clock.close {"], "stubs": [SNAPSHOTS], "recorders": ["ladder"],
+    spec = {"blocks": ["fn drawLive(", "on clock.close {"], "stubs": [SNAPSHOTS], "recorders": ["ladder"],
             "context": {"liveSupported": True, "step": 50, "tfSeconds": 1800, "clock": {"time": 120},
-                        "context": {"timeframe": 1800}, "peaks": {"rolling": 200, "items": [1000]},
-                        "liveGot": 0, "liveWant": 0},
+                        "peaks": {"rolling": 200, "items": [1000]}, "liveGot": 0, "liveWant": 0,
+                        "tStep": 0.0, "tm0": -1.0, "tm1": -1.0},
             "calls": [{"fn": "clock_close"}, {"fn": "drawn"}], "read": ["liveGot", "liveWant"]}
     out = run("swordfish-delta-heat.m5", spec)
     rows = sorted(out["results"][1])
     assert rows == [[100, 150, 10 * 125], [200, 250, -100 * 225]]
     assert out["read"] == {"liveGot": 2, "liveWant": 3}
+
+
+LIVE = """const rows = [];
+function row(lo, hi, usd) { rows.push([lo, hi, usd]); }
+function snap(t, lo, hi, delta) {
+  return {time: t, length: 1, get: i => ({from: lo, to: hi, delta: delta, total: Math.abs(delta)})};
+}
+let snaps = [];
+minutes = {bucketsByStep: (step, back) => snaps[back] ?? null};
+function setSnaps(list) { snaps = list.map(s => s && snap(...s)); }
+function trade(p, sz, buy, t) { rows.length = 0; onLiveTrade(p, sz, buy, t); return rows.map(r => r.slice()); }
+function closeAt(t) { rows.length = 0; clock = {time: t}; clock_close(); return rows.map(r => r.slice()); }"""
+
+LIVE_CONTEXT = {"liveSupported": True, "step": 50, "tfSeconds": 1800, "peaks": {"rolling": 200, "items": [1000]},
+                "liveGot": 0, "liveWant": 0, "tStep": 0.0, "lastLiveSec": 0.0, "tm0": -1.0, "tm1": -1.0,
+                "td0": {"map": {}}, "tv0": {"map": {}}, "tk0": {"rolling": 4096},
+                "td1": {"map": {}}, "tv1": {"map": {}}, "tk1": {"rolling": 4096}}
+
+
+def live(calls):
+    spec = {"blocks": ["fn drawLive(", "fn onLiveTrade(", "on clock.close {"], "stubs": [LIVE], "recorders": ["ladder"],
+            "context": LIVE_CONTEXT, "calls": calls, "read": ["liveGot", "liveWant"]}
+    return run("swordfish-delta-heat.m5", spec)
+
+
+def test_minute_in_progress_comes_from_live_trades():
+    # Minute 0 has a snapshot (-100 coins at 200-250); minute 1 is in progress, so only its live trades exist.
+    out = live([{"fn": "setSnaps", "args": [[None, [0, 200, 250, -100]]]},
+                {"fn": "trade", "args": [120, 10, True, 75]}])
+    assert sorted(out["results"][1]) == [[100, 150, 10 * 125], [200, 250, -100 * 225]]
+    assert out["read"] == {"liveGot": 2, "liveWant": 2}
+
+
+def test_a_minutes_snapshot_replaces_its_live_trades_without_double_counting():
+    # Minute 1's trades (+10) were live; its snapshot (+12, the full minute) then arrives, while minute 2 trades +1.
+    out = live([{"fn": "setSnaps", "args": [[None, [0, 200, 250, -100]]]},
+                {"fn": "trade", "args": [120, 10, True, 75]},
+                {"fn": "setSnaps", "args": [[None, [60, 100, 150, 12], [0, 200, 250, -100]]]},
+                {"fn": "trade", "args": [130, 1, True, 125]}])
+    assert sorted(out["results"][3]) == [[100, 150, 13 * 125], [200, 250, -100 * 225]]
+    assert out["read"] == {"liveGot": 3, "liveWant": 3}
+
+
+def test_live_ladder_redraws_at_most_once_a_second():
+    out = live([{"fn": "setSnaps", "args": [[None]]},
+                {"fn": "trade", "args": [120, 1, True, 75]},
+                {"fn": "trade", "args": [120, 1, True, 75]},
+                {"fn": "trade", "args": [120, 1, True, 76]}])
+    assert out["results"][1] != [] and out["results"][2] == [] and out["results"][3] == [[100, 150, 3 * 125]]
+
+
+
+# PR #6 review: out-of-order trades and a buffered minute without its own snapshot.
+
+def test_a_late_trade_for_an_older_minute_does_not_clear_the_newer_one():
+    # Minute 120 holds 10 buys; a late print from minute 0 (same parity slot) arrives, then one more buy in minute 120.
+    out = live([{"fn": "setSnaps", "args": [[None]]},
+                {"fn": "trade", "args": [120, 10, True, 120]},
+                {"fn": "trade", "args": [120, 10, False, 59]},
+                {"fn": "trade", "args": [120, 1, True, 121]}])
+    assert out["results"][1] == [[100, 150, 10 * 125]]
+    assert out["results"][3] == [[100, 150, 11 * 125]]
+
+
+def test_a_buffered_minute_is_kept_until_its_own_snapshot_arrives():
+    # Minutes 60 (10 buys) and 120 (1 buy) are buffered. Minute 120's snapshot then arrives but minute 60's does not:
+    # minute 60's buffered trades must still count.
+    out = live([{"fn": "setSnaps", "args": [[None, None, [0, 200, 250, -100]]]},
+                {"fn": "trade", "args": [120, 10, True, 61]},
+                {"fn": "trade", "args": [120, 1, True, 121]},
+                {"fn": "setSnaps", "args": [[[120, 100, 150, 1], None, [0, 200, 250, -100]]]},
+                {"fn": "closeAt", "args": [120]}])
+    assert sorted(out["results"][2]) == [[100, 150, 11 * 125], [200, 250, -100 * 225]]
+    assert sorted(out["results"][4]) == [[100, 150, 11 * 125], [200, 250, -100 * 225]]
+    assert out["read"] == {"liveGot": 3, "liveWant": 3}

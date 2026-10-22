@@ -7,10 +7,12 @@ script "Swordfish Delta Heat"
 // buying, red for net selling. The number sits across the whole lane so it stays legible however short the bar is. The
 // chart's candle runs as a thin strip at the bar's left edge. Dollars, so the scale reads the same on any coin.
 // Closed bars come from MMT's per-bar volume snapshots (the last 250 bars). MMT has no forming bar snapshot, so the
-// live bar is built from the completed one-minute snapshots since it opened (exact per row, at most a minute behind,
-// from any load time) and redrawn as each minute closes; when the bar closes, its own snapshot replaces that. A missing
-// minute is skipped rather than ending the rebuild, and the title shows how many of the bar's minutes were found. (No live
-// trade tapes: they count against MMT's live-feed limit.)
+// live bar is built from the completed one-minute snapshots since it opened (exact per row, from any load time); the
+// minute in progress, which has no snapshot, is added from live trades (no trade history is loaded), and the ladder is
+// redrawn as trades arrive (at most once a second) and as each minute closes. When the bar closes, its own snapshot
+// replaces that. A missing minute is skipped rather than ending the rebuild, and the title shows how many of the bar's
+// minutes were found. The minute in which the script starts misses the trades before it went live until that
+// minute's snapshot arrives.
 // When the auto row size changes, every bar with a snapshot is redrawn at the new size, so all ladders on screen share
 // one row height, and the colour scale is rebuilt from their largest rows at that size.
 // Live reconstruction is limited to whole-minute chart timeframes from 1m through 4h.
@@ -34,6 +36,8 @@ setup (
   liveSupported = tfSeconds >= 60 && tfSeconds <= 14400 && math.floor(float(tfSeconds) / 60.0) * 60.0 == float(tfSeconds)
   tfScale = math.sqrt(float(tfSeconds) / 1800.0) ?? 1.0
   source = venue == "Binance + Bybit perps" ? markets.agg("binancef", "bybitf") : venue == "Chart venue" ? context.exchange : markets.agg("binancef", "bybitf", "okxf")
+  useChart = venue == "Chart venue"
+  useAll = venue == "Perps: Binance, Bybit, OKX"
 )
 
 data (
@@ -43,6 +47,12 @@ data (
   // a one-minute clock, live only: reads from the chart's own handler are pinned to the bar's open, so the
   // forming bar is rebuilt from here as each minute closes
   clock = subscribe(data.ohlcv, timeframe: 1m, history: 0s)
+  // live trades only (no history): the minute in progress has no snapshot yet, so it is built from these, and the
+  // ladder is redrawn as they arrive instead of once a minute
+  tBn = subscribe(data.trades, exchange: "binancef", history: 0s)
+  tBb = subscribe(data.trades, exchange: "bybitf", history: 0s)
+  tOk = subscribe(data.trades, exchange: "okxf", history: 0s)
+  tCh = subscribe(data.trades, history: 0s)
 )
 
 plot ladder = plot.cells(title: "Delta ladder", columns: 1, scale: cellscale.unit, candles: cellcandles.side, format: cellformat.compact, decimals: 0, sign: true)
@@ -57,6 +67,18 @@ state (
   liveWant: int = 0
   // each kept bar's largest row at the current row size, newest first, for rebuilding the colour scale on a resize
   resized = float[](1000)
+  // live trades for the two most recent minutes (slot by minute parity): minute start (unix s), net and total coins
+  // per row, and the rows touched; tStep is the row size they were bucketed with
+  tm0: float = -1.0
+  td0 = map<int, float>(4096)
+  tv0 = map<int, float>(4096)
+  tk0 = int[](4096)
+  tm1: float = -1.0
+  td1 = map<int, float>(4096)
+  tv1 = map<int, float>(4096)
+  tk1 = int[](4096)
+  tStep: float = 0.0
+  lastLiveSec: float = 0.0
 )
 
 // 1, 2, 2.5 or 5 times a power of ten, nearest above the target.
@@ -83,68 +105,148 @@ fn row(lo: float, hi: float, usd: float, ref: float, biggest: float, strongest: 
   }
 }
 
-// The live bar: the completed minutes since it opened, redrawn as each minute closes.
-on clock.close {
-  let mt = clock.time
-  if liveSupported && mt != null && step > 0.0 {
-    let barStart = time.floor(mt, context.timeframe)
-    let barU = float(time.unixSeconds(barStart) ?? 0)
-    let ref = math.max(peaks.avg() ?? 0.0, 0.000000001)
-    // sum the bar's minutes into rows keyed by row index
-    let lowRow = 1000000000000.0
-    let highRow = -1000000000000.0
-    let span = int(float(tfSeconds) / 60.0) ?? 1
-    let more = true
-    let sums = map<int, float>(2048)
-    let vols = map<int, float>(2048)
-    // every minute snapshot back to the bar's open: a missing minute (no trades, or no data) is skipped, not the end,
-    // so earlier minutes are never discarded
-    let got = 0
-    for back in 0..span {
-      if more {
-        let b = minutes.bucketsByStep(step, barsAgo: back)
-        if b != null && float(time.unixSeconds(b.time) ?? 0) < barU {
-          more = false
-        } else if b != null {
-          got += 1
-          for i in 0..b.len {
-            let c = b.get(i)
-            if c != null && c.total > 0.0 {
-              let r = math.floor((c.from + c.to) / 2.0 / step)
-              let k = int(r) ?? 0
-              sums.set(k, (sums.get(k) ?? 0.0) + c.delta)
-              vols.set(k, (vols.get(k) ?? 0.0) + c.total)
-              lowRow = math.min(lowRow, r)
-              highRow = math.max(highRow, r)
-            }
+// The live bar at second `sec`: completed minutes from MMT's one-minute snapshots, plus live trades for any buffered
+// minute without its own snapshot (the minute in progress has none; the one just closed, or a skipped one, may not).
+fn drawLive(sec: float) {
+  if !liveSupported || step <= 0.0 { return }
+  let tf = float(tfSeconds)
+  let barU = math.floor(sec / tf) * tf
+  let barStart = time.fromUnixSeconds(int(barU) ?? 0)
+  let ref = math.max(peaks.avg() ?? 0.0, 0.000000001)
+  let lowRow = 1000000000000.0
+  let highRow = -1000000000000.0
+  let span = int(tf / 60.0) ?? 1
+  let more = true
+  let sums = map<int, float>(4096)
+  let vols = map<int, float>(4096)
+  // every minute snapshot back to the bar's open: a missing minute (no trades, or no data) is skipped, not the end,
+  // so earlier minutes are never discarded
+  let got = 0
+  // the minutes (unix s / 60) that have a snapshot: a buffered minute is replaced only by its own snapshot
+  let seen = map<int, bool>(512)
+  for back in 0..span {
+    if more {
+      let b = minutes.bucketsByStep(step, barsAgo: back)
+      let bt = b != null ? float(time.unixSeconds(b.time) ?? 0) : -1.0
+      if b != null && bt < barU {
+        more = false
+      } else if b != null {
+        got += 1
+        seen.set(int(bt / 60.0) ?? 0, true)
+        for i in 0..b.len {
+          let c = b.get(i)
+          if c != null && c.total > 0.0 {
+            let r = math.floor((c.from + c.to) / 2.0 / step)
+            let k = int(r) ?? 0
+            sums.set(k, (sums.get(k) ?? 0.0) + c.delta)
+            vols.set(k, (vols.get(k) ?? 0.0) + c.total)
+            lowRow = math.min(lowRow, r)
+            highRow = math.max(highRow, r)
           }
         }
       }
     }
-    liveGot = got
-    liveWant = int(math.floor((float(time.unixSeconds(mt) ?? 0) - barU) / 60.0)) + 1 ?? got
-    if highRow >= lowRow {
-      let rows = int(highRow - lowRow) ?? 0
-      let biggest = 0.0
-      let strongest = -1
-      for j in 0..(rows + 1) {
-        let r = lowRow + float(j)
-        let usd = (sums.get(int(r) ?? 0) ?? 0.0) * (r + 0.5) * step
-        if math.abs(usd) > biggest {
-          biggest = math.abs(usd)
-          strongest = j
-        }
-      }
-      ladder.clear(time: barStart)
-      for j in 0..(rows + 1) {
-        let r = lowRow + float(j)
-        let k = int(r) ?? 0
-        if (vols.get(k) ?? 0.0) > 0.0 {
-          row(r * step, (r + 1.0) * step, (sums.get(k) ?? 0.0) * (r + 0.5) * step, ref, biggest, j == strongest, barStart)
-        }
+  }
+  // live trades for minutes of this bar that have no snapshot of their own (yet)
+  if tStep == step && tm0 >= barU && tm0 < barU + tf && !seen.has(int(tm0 / 60.0) ?? 0) {
+    got += 1
+    for k in tk0 {
+      if k != null {
+        sums.set(k, (sums.get(k) ?? 0.0) + (td0.get(k) ?? 0.0))
+        vols.set(k, (vols.get(k) ?? 0.0) + (tv0.get(k) ?? 0.0))
+        lowRow = math.min(lowRow, float(k))
+        highRow = math.max(highRow, float(k))
       }
     }
   }
+  if tStep == step && tm1 >= barU && tm1 < barU + tf && !seen.has(int(tm1 / 60.0) ?? 0) {
+    got += 1
+    for k in tk1 {
+      if k != null {
+        sums.set(k, (sums.get(k) ?? 0.0) + (td1.get(k) ?? 0.0))
+        vols.set(k, (vols.get(k) ?? 0.0) + (tv1.get(k) ?? 0.0))
+        lowRow = math.min(lowRow, float(k))
+        highRow = math.max(highRow, float(k))
+      }
+    }
+  }
+  liveGot = got
+  liveWant = int(math.floor((sec - barU) / 60.0)) + 1 ?? got
+  if highRow >= lowRow {
+    let rows = int(highRow - lowRow) ?? 0
+    let biggest = 0.0
+    let strongest = -1
+    for j in 0..(rows + 1) {
+      let r = lowRow + float(j)
+      let usd = (sums.get(int(r) ?? 0) ?? 0.0) * (r + 0.5) * step
+      if math.abs(usd) > biggest {
+        biggest = math.abs(usd)
+        strongest = j
+      }
+    }
+    ladder.clear(time: barStart)
+    for j in 0..(rows + 1) {
+      let r = lowRow + float(j)
+      let k = int(r) ?? 0
+      if (vols.get(k) ?? 0.0) > 0.0 {
+        row(r * step, (r + 1.0) * step, (sums.get(k) ?? 0.0) * (r + 0.5) * step, ref, biggest, j == strongest, barStart)
+      }
+    }
+  }
+}
+
+// One live trade into its minute's slot; the ladder is redrawn at most once a second. A slot only moves forward: a late
+// trade for a minute older than the one its slot holds is dropped rather than clearing the newer minute.
+fn onLiveTrade(p: float, sz: float, buy: bool, tt: time) {
+  if !liveSupported || step <= 0.0 || !(p > 0.0) || !(sz > 0.0) { return }
+  if tStep != step {
+    // a new row size: trades bucketed at the old one cannot be reused
+    tm0 = -1.0
+    tm1 = -1.0
+    tStep = step
+  }
+  let sec = float(time.unixSeconds(tt) ?? 0)
+  let m = math.floor(sec / 60.0) * 60.0
+  let r = int(math.floor(p / step)) ?? 0
+  let net = buy ? sz : -sz
+  if math.floor(m / 60.0) - math.floor(m / 120.0) * 2.0 == 0.0 {
+    if m < tm0 { return }
+    if tm0 != m {
+      td0.clear()
+      tv0.clear()
+      tk0.clear()
+      tm0 = m
+    }
+    if !td0.has(r) && tk0.len < 4096 { tk0.push(r) }
+    td0.set(r, (td0.get(r) ?? 0.0) + net)
+    tv0.set(r, (tv0.get(r) ?? 0.0) + sz)
+  } else {
+    if m < tm1 { return }
+    if tm1 != m {
+      td1.clear()
+      tv1.clear()
+      tk1.clear()
+      tm1 = m
+    }
+    if !td1.has(r) && tk1.len < 4096 { tk1.push(r) }
+    td1.set(r, (td1.get(r) ?? 0.0) + net)
+    tv1.set(r, (tv1.get(r) ?? 0.0) + sz)
+  }
+  if sec > lastLiveSec {
+    lastLiveSec = sec
+    drawLive(sec)
+  }
+}
+
+on tBn.trade(tr) { if !useChart { onLiveTrade(tr.price, tr.size, tr.isBuy, tr.time) } }
+on tBb.trade(tr) { if !useChart { onLiveTrade(tr.price, tr.size, tr.isBuy, tr.time) } }
+on tOk.trade(tr) { if useAll { onLiveTrade(tr.price, tr.size, tr.isBuy, tr.time) } }
+on tCh.trade(tr) { if useChart { onLiveTrade(tr.price, tr.size, tr.isBuy, tr.time) } }
+
+// Each minute close also redraws, so a quiet market still advances.
+on clock.close {
+  let mt = clock.time
+  if mt != null { drawLive(float(time.unixSeconds(mt) ?? 0)) }
 }
 
 // One closed bar's ladder from its snapshot `back` bars ago, at the current row size, against the colour reference.
@@ -181,7 +283,7 @@ fn drawSnapshot(back: int, ref: float, draw: bool) -> float {
 // Closed bars: the volume snapshot, once per bar.
 on chart.update {
   if chart.isLast {
-    let liveText = liveWant > liveGot ? str.format("live ladder: {0} of {1} minutes (missing minutes: no trades or no data)", liveGot, liveWant) : "live ladder up to 1m behind"
+    let liveText = liveWant > liveGot ? str.format("live ladder: {0} of {1} minutes (missing minutes: no trades or no data)", liveGot, liveWant) : "live ladder in real time"
     script.setTitle(liveSupported ? str.concat("Swordfish Delta Heat | ", liveText) : "Swordfish Delta Heat | closed bars only; live ladder needs whole-minute 1m-4h charts")
   }
 }
