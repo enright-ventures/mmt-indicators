@@ -1,3 +1,17 @@
+## Liquidity Profile: dynamic lookback (2026-11-05)
+
+The default lookback now starts at a major swing: a reversal of 4 x the 30-day average daily range, 2 legs back, at least 7 days. It reads hourly snapshots as far back as MMT keeps them and daily before that, instead of choosing one timeframe per lookback. Live results on 30m charts, each reached within 7 s with no errors: ETH 132 days back to the 1,510 low, POC 1,878.5, nearest gap below 1,963.6-2,212.4; BTC 127 days back to the 57,750 low, POC 63,888, nearest gap below 66,432-75,409.
+
+The swing rule was compared on 400 Binance daily candles, using daily highs and lows rather than the script's hourly ones. Days back:
+
+| Reversal, legs | BTC | ETH | SOL | HYPE | LINK |
+|---|---|---|---|---|---|
+| 4x, 2 legs (default) | 126 | 131 | 151 | 42 | 151 |
+| 4x, 1 leg | 44 | 44 | 38 | 11 | 36 |
+| 3x, 2 legs | 50 | 44 | 95 | 42 | 49 |
+
+Tests cover swing detection (a wide candle's own range is not a swing, alternation, the running extreme is excluded), the window choice and the value area. The lookback label and start line were checked by screenshot on BTC; the start line is off screen at that zoom. The swing size and legs are a visual convention and have not been backtested.
+
 ## Liquidity Profile (2026-11-05)
 
 MMT's built-in VPVR has no fixed range: it profiles what is on screen. This script uses MMT's rolling profile (`data.volume.profile(bars)`) over a fixed lookback and draws with edge-anchored boxes, so it does not change with the view. A live probe on ETH found 626 hourly snapshots (26 days, $0.10 bins), 344 of 4h (57 days, $0.50) and 265 daily (265 days, $1). On the live ETH chart it loaded in 22 s with no errors: 30-day POC 2,440, value area 2,284 to 2,509, gaps 2,581.5-2,603.6 and 2,620.2-2,692.3. Seven tests cover the gap finder (interior runs, tails, separate runs, minimum height, the threshold boundary, no heavy rows) and which side of price a gap is on; rendering was checked by screenshot. The gap thresholds are a visual convention and have not been backtested.
