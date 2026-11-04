@@ -1,3 +1,7 @@
+## Liquidity Profile (2026-11-05)
+
+MMT's built-in VPVR has no fixed range: it profiles what is on screen. This script uses MMT's rolling profile (`data.volume.profile(bars)`) over a fixed lookback and draws with edge-anchored boxes, so it does not change with the view. A live probe on ETH found 626 hourly snapshots (26 days, $0.10 bins), 344 of 4h (57 days, $0.50) and 265 daily (265 days, $1). On the live ETH chart it loaded in 22 s with no errors: 30-day POC 2,440, value area 2,284 to 2,509, gaps 2,581.5-2,603.6 and 2,620.2-2,692.3. Seven tests cover the gap finder (interior runs, tails, separate runs, minimum height, the threshold boundary, no heavy rows) and which side of price a gap is on; rendering was checked by screenshot. The gap thresholds are a visual convention and have not been backtested.
+
 ## Delta Heat: real-time current candle (2026-10-22)
 
 The live ladder was rebuilt only at each minute close from MMT's one-minute snapshots, so the current candle lagged by up to a minute and appeared up to a minute after loading. MMT has no forming volume profile, so the minute in progress now comes from live trades (history 0s, Binance/Bybit/OKX or the chart venue), bucketed on the ladder's row grid, kept for the two most recent minutes and dropped once that minute's snapshot exists, so no minute is counted twice. Redraws happen on trades, at most once a second, and at each minute close.

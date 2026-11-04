@@ -11,7 +11,7 @@ The full reference, with a visual key for every line and marker, is [`docs/sword
 
 | Path | What it is |
 |---|---|
-| [`indicators/swordfish/`](indicators/swordfish) | The six Swordfish indicators (below) |
+| [`indicators/swordfish/`](indicators/swordfish) | The seven Swordfish indicators (below) |
 | [`tools/`](tools) | TradingView watchlist importer and the source of the "Import to MMT" Mac app |
 | [`docs/swordfish-guide.html`](docs/swordfish-guide.html) | The guide: what each indicator draws, how to read it, settings, data and checks |
 | [`validation/`](validation) | Reference implementations, cross-checks and backtests, with results in [`validation/README.md`](validation/README.md) |
@@ -25,6 +25,7 @@ The full reference, with a visual key for every line and marker, is [`docs/sword
 | **Swordfish Rolling VWAP** (`swordfish-rolling-vwap.m5`) | Trailing 7D, 30D and 365D VWAPs | 30m and daily candles, Binance + Bybit perps pooled |
 | **Swordfish Delta Heat** (`swordfish-delta-heat.m5`) | A delta ladder on every candle: net aggressive buying or selling per price row, in dollars, length relative to the candle's largest row, colour against a typical bar | MMT volume snapshots, Binance + Bybit + OKX perps |
 | **Swordfish Offside** (`swordfish-offside.m5`) | Failed breakdowns and breakouts, measured from MMT's 5m volume profiles (pressed size, average fill, reclaim volume) with break-flow and counterflow proxies; delta divergences, reaction zones and flow-weighted prices | 5m volume profiles and candles, open interest and liquidations; Binance, Bybit and OKX perps |
+| **Swordfish Liquidity Profile** (`swordfish-liquidity-profile.m5`) | A fixed-lookback volume profile pinned to the left edge (14, 30, 90 or 180 days, whatever is on screen), with liquidity gaps as faint bands across the chart | MMT's rolling volume profile (1h, 4h or daily snapshots), Binance, Bybit and OKX perps |
 | **Swordfish Bar Stats** (`swordfish-bar-stats.m5`) | A table under the chart: long and short liquidations, signed +L and +S flow proxies, volume split with net delta | Open interest, liquidations and candles, Binance, Bybit and OKX perps |
 
 ### Offside's trap definition
@@ -75,8 +76,8 @@ side is described at the bottom right; every trap is in the script's "Recent tra
   layouts, so use a single chart.
 - Layers, top to bottom:
   - Swordfish Composites v2, twice: one with **Composite period** set to Daily, one to Weekly.
-  - Swordfish Calendar VWAP: **Panel anchor** Weekly, all four units on, **Value areas and labels on older periods** set to All.
-  - Swordfish Delta Heat, Swordfish Rolling VWAP and Swordfish Offside, with default settings.
+  - Swordfish Calendar VWAP: **Panel anchor** Weekly, all four units on, **+/-1 SD bands and labels on older periods** set to All.
+  - Swordfish Delta Heat, Swordfish Rolling VWAP, Swordfish Offside and Swordfish Liquidity Profile, with default settings.
   - Swordfish Bar Stats, in its own pane.
   - MMT's built-in **Open Interest** and **Delta Volume** panes, each set to Binance, Bybit and OKX perps: the pane's
     gear, then Aggregate, then Markets. Hyperliquid is not used anywhere.
@@ -114,6 +115,7 @@ nothing on the chart, and they are plotted from the update handler, so the live 
   `start_min`, `end_min`, `members`. Also `x.<unit>.closed_periods` and `x.<unit>.ok`. The layer title also carries the
   newest and prior VAH/POC/VAL, because `script_get_plot_values` only returns the first layer of a script that is on the
   chart twice (Daily and Weekly).
+- Liquidity Profile: `x.poc`, `x.vah`, `x.val`, and the nearest gaps: `x.gap_above.*`, `x.gap_below.*` and `x.gap_inside.*` (`lo`, `hi`).
 - Calendar VWAP: `x.{W,M,Q,Y}.vwap` and `.sd` for the current period, and `x.{pW,pM,pQ,pY}.*` for the prior one.
 - Offside: `x.trap_longs.*` and `x.trap_shorts.*` (level, stop, status, pressed, avg_fill, reclaim_x, flows),
   `x.active.*` (the level being tracked), `x.watch.*`, `x.zone_above.*` and `x.zone_below.*`, divergences

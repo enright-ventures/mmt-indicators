@@ -1,0 +1,270 @@
+script "Swordfish Liquidity Profile"
+
+// A fixed-lookback volume profile pinned to the left edge of the chart (a setting; the price labels of other scripts
+// sit on the right), independent of what is on screen: buy and sell
+// volume per price row over the last 14, 30, 90 or 180 days, from MMT's rolling volume profile (combined across the
+// chosen perps by MMT). Rows inside the 70% volume value area are stronger and the point of control is outlined.
+// Liquidity gaps: runs of rows with little traded volume between rows with more, drawn as faint bands across the chart.
+// A gap marks where little traded in the lookback, not resting orders or a level price must respect.
+// Source periods by lookback: 1h snapshots for 14 days, 4h for 30, daily for 90 and 180. MMT has no profile for a period
+// still in progress, so the newest up to one source period (a day on the longer lookbacks) is not included.
+
+input (
+  input.section(title: "Profile")
+  lookback = input.select("30 days", title: "Lookback", options: ["14 days", "30 days", "90 days", "180 days"])
+  rows = input.int(100, title: "Rows", min: 20, max: 200)
+  venue = input.select("Perps: Binance, Bybit, OKX", title: "Volume from", options: ["Chart venue", "Binance + Bybit perps", "Perps: Binance, Bybit, OKX"])
+  input.section(title: "Liquidity gaps")
+  showGaps = input.bool(true, title: "Show gaps")
+  gapPct = input.float(30.0, title: "A gap row trades below (% of the average row)", min: 1.0, max: 100.0)
+  gapMinPct = input.float(0.3, title: "Minimum gap height (% of price)", min: 0.0, max: 10.0)
+  gapsEach = input.int(2, title: "Gaps shown above and below price", min: 1, max: 6)
+  input.section(title: "Look")
+  side = input.select("Left", title: "Histogram at the", options: ["Left", "Right"], description: "Left keeps it clear of the price labels other scripts draw at the right edge.")
+  widthPx = input.float(220.0, title: "Histogram width (pixels)", min: 40.0, max: 800.0)
+  buyColor = input.color(color.rgb(31, 166, 125), title: "Buying")
+  sellColor = input.color(color.rgb(214, 72, 92), title: "Selling", sameLine: true)
+  gapColor = input.color(color.rgb(236, 190, 90), title: "Gaps", sameLine: true)
+)
+
+setup (
+  source = venue == "Binance + Bybit perps" ? markets.agg("binancef", "bybitf") : venue == "Chart venue" ? context.exchange : markets.agg("binancef", "bybitf", "okxf")
+  days = lookback == "14 days" ? 14 : lookback == "30 days" ? 30 : lookback == "90 days" ? 90 : 180
+  srcTf = days <= 14 ? tf("1h") : days <= 30 ? tf("4h") : tf("1D")
+  srcBars = days <= 14 ? days * 24 : days <= 30 ? days * 6 : days
+  barSpan = time.nominalDuration(context.timeframe)
+  edgeAnchor = side == "Left" ? anchor.left : anchor.right
+  labelAlign = side == "Left" ? "left" : "right"
+)
+
+data (
+  chart = subscribe(data.ohlcv)
+  vp = subscribe(data.volume, exchange: source, timeframe: srcTf, history: srcBars + 5)
+  // a one-minute clock, live only: picks up each newly completed source period, whatever the chart's timeframe
+  clock = subscribe(data.ohlcv, timeframe: 1m, history: 0s)
+)
+
+window details = window(title: "Liquidity gaps") {
+  gaps: table.new([
+    table.col(title: "Gap", width: 1.4),
+    table.col(title: "Height", align: align.right),
+    table.col(title: "Distance", align: align.right),
+    table.col(title: "Side", width: 0.6),
+  ], title: "Gaps", capacity: 64),
+  // Agent export: the point of control, value area and nearest gap each side as hidden series for
+  // script_get_plot_values. Null when unavailable.
+  export: chart.panel(chart),
+}
+
+plot (
+  xPoc = plot.line(title: "x.poc", on: details.export)
+  xVah = plot.line(title: "x.vah", on: details.export)
+  xVal = plot.line(title: "x.val", on: details.export)
+  xAboveLo = plot.line(title: "x.gap_above.lo", on: details.export)
+  xAboveHi = plot.line(title: "x.gap_above.hi", on: details.export)
+  xBelowLo = plot.line(title: "x.gap_below.lo", on: details.export)
+  xBelowHi = plot.line(title: "x.gap_below.hi", on: details.export)
+  xInsideLo = plot.line(title: "x.gap_inside.lo", on: details.export)
+  xInsideHi = plot.line(title: "x.gap_inside.hi", on: details.export)
+)
+
+state (
+  // the profile's rows, lowest first, and the gaps found in them, lowest first
+  rLo = float[](200)
+  rHi = float[](200)
+  rBuy = float[](200)
+  rSell = float[](200)
+  gLo = float[](64)
+  gHi = float[](64)
+  poc: float = 0.0
+  vah: float = 0.0
+  val: float = 0.0
+  // the newest source period drawn (unix s), how many gaps sat above price when drawn, and the live bar's time
+  drawnFor: float = -1.0
+  drawnAbove: int = -1
+  liveBar: time? = null
+  hist = entities.boxPool(max: 410, anchor: edgeAnchor)
+  bands = entities.boxPool(max: 12)
+  tags = entities.labelPool(max: 12, anchor: edgeAnchor)
+)
+
+// A price with decimals for its size: 80,345 / 2,460.5 / 184.23 / 0.19345.
+fn priceText(v: float) -> string {
+  let a = math.abs(v)
+  if a >= 10000.0 { return str.format("{0:,.0}", v) }
+  if a >= 1000.0 { return str.format("{0:,.1}", v) }
+  if a >= 100.0 { return str.format("{0:.2}", v) }
+  if a >= 10.0 { return str.format("{0:.3}", v) }
+  if a >= 1.0 { return str.format("{0:.4}", v) }
+  return str.format("{0:.5}", v)
+}
+
+// Gaps in the current rows: runs of rows trading below `thr`, with rows at or above it on both sides (the thin tails
+// at the top and bottom of the range are not gaps), at least `minHeight` tall.
+fn findGaps(thr: float, minHeight: float) {
+  gLo.clear()
+  gHi.clear()
+  let start = -1
+  let seenHeavy = false
+  for i in 0..rLo.len {
+    let low = (rBuy[i] ?? 0.0) + (rSell[i] ?? 0.0) < thr
+    if low {
+      if seenHeavy && start < 0 { start = i }
+    } else {
+      if start >= 0 {
+        let lo = rLo[start] ?? 0.0
+        let hi = rLo[i] ?? 0.0
+        if hi - lo >= minHeight && gLo.len < 64 {
+          gLo.push(lo)
+          gHi.push(hi)
+        }
+        start = -1
+      }
+      seenHeavy = true
+    }
+  }
+}
+
+// The nearest gap index above price (first with its low above price), or gLo.len when none.
+fn firstAbove(price: float) -> int {
+  for k in 0..gLo.len {
+    if (gLo[k] ?? 0.0) > price { return k }
+  }
+  return gLo.len
+}
+
+// The index of the gap price sits inside, or -1.
+fn insideGap(price: float) -> int {
+  for k in 0..gLo.len {
+    if (gLo[k] ?? 0.0) <= price && price <= (gHi[k] ?? 0.0) { return k }
+  }
+  return -1
+}
+
+// One gap as a faint band across the chart with its prices just inside the histogram.
+fn drawGap(k: int, at: time) {
+  let lo = gLo[k] ?? 0.0
+  let hi = gHi[k] ?? 0.0
+  bands.get("g", k).set(at, hi, at + barSpan, lo, color: color.withAlpha(gapColor, 26), extend: extend.both, zIndex: -1)
+  tags.get("g", k).set(widthPx + 10.0, (lo + hi) / 2.0, str.format("gap {0} - {1}", priceText(lo), priceText(hi)), color: gapColor, size: 11, textAlign: labelAlign, zIndex: 5)
+}
+
+// The nearest gaps each side of price, drawn and listed, and the title.
+fn drawGaps(price: float, at: time) {
+  bands.clear("g")
+  tags.clear("g")
+  details.gaps.clear()
+  let above = firstAbove(price)
+  let inside = insideGap(price)
+  if showGaps {
+    if inside >= 0 { drawGap(inside, at) }
+    let lowest = inside >= 0 ? inside : above
+    for n in 0..gapsEach {
+      let up = above + n
+      if up < gLo.len && up != inside { drawGap(up, at) }
+      let down = lowest - 1 - n
+      if down >= 0 { drawGap(down, at) }
+    }
+  }
+  for k in 0..gLo.len {
+    let lo = gLo[k] ?? 0.0
+    let hi = gHi[k] ?? 0.0
+    let side = k == inside ? "inside" : lo > price ? "above" : "below"
+    let dist = k == inside ? 0.0 : lo > price ? lo / price - 1.0 : hi / price - 1.0
+    details.gaps.row(str.format("{0}", 1000 + k), str.format("{0} - {1}", priceText(lo), priceText(hi)), str.format("{0:.2%}", hi / lo - 1.0), str.format("{0:+.2%}", dist), side)
+  }
+  drawnAbove = above
+  let ga = above < gLo.len ? str.format(" | gap above {0} - {1}", priceText(gLo[above] ?? 0.0), priceText(gHi[above] ?? 0.0)) : ""
+  let below = (inside >= 0 ? inside : above) - 1
+  let gb = below >= 0 ? str.format(" | gap below {0} - {1}", priceText(gLo[below] ?? 0.0), priceText(gHi[below] ?? 0.0)) : ""
+  script.setTitle(str.concat(str.format("Swordfish Liquidity Profile | {0}d | POC {1}", days, priceText(poc)), inside >= 0 ? " | inside a gap" : "", ga, gb))
+}
+
+// Rebuild the histogram from the rolling profile when a new source period has completed.
+fn refresh() {
+  let newestT = vp.time()
+  let at = liveBar
+  if newestT == null || at == null { return }
+  let newest = float(time.unixSeconds(newestT) ?? 0)
+  if newest == drawnFor { return }
+  let p = vp.profile(srcBars)
+  let area = p.valueArea(70.0)
+  let top = p.poc()
+  poc = top != null ? top.price : 0.0
+  vah = area != null ? area.highPrice : 0.0
+  val = area != null ? area.lowPrice : 0.0
+  let b = p.buckets(rows)
+  if b == null { return }
+  drawnFor = newest
+  rLo.clear()
+  rHi.clear()
+  rBuy.clear()
+  rSell.clear()
+  let biggest = 0.0
+  let total = 0.0
+  for i in 0..b.len {
+    let c = b.get(i)
+    if c != null && rLo.len < 200 {
+      rLo.push(c.from)
+      rHi.push(c.to)
+      rBuy.push(c.buy)
+      rSell.push(c.sell)
+      biggest = math.max(biggest, c.total)
+      total += c.total
+    }
+  }
+  let n = rLo.len
+  hist.clear("r")
+  if n > 0 && biggest > 0.0 {
+    for i in 0..n {
+      let lo = rLo[i] ?? 0.0
+      let hi = rHi[i] ?? 0.0
+      let buy = rBuy[i] ?? 0.0
+      let sell = rSell[i] ?? 0.0
+      let inArea = hi >= val && lo <= vah
+      let hasPoc = lo <= poc && poc < hi
+      let alpha = inArea ? 110 : 55
+      let lenBuy = widthPx * buy / biggest
+      let lenSell = widthPx * sell / biggest
+      let gapY = (hi - lo) * 0.06
+      if lenBuy > 0.0 {
+        hist.get("r", i, "b").set(0.0, hi - gapY, lenBuy, lo + gapY, color: color.withAlpha(buyColor, alpha), borderWidth: hasPoc ? 1.0 : 0.0, borderColor: hasPoc ? color.rgb(240, 240, 240) : null, zIndex: 1)
+      }
+      if lenSell > 0.0 {
+        hist.get("r", i, "s").set(lenBuy, hi - gapY, lenBuy + lenSell, lo + gapY, color: color.withAlpha(sellColor, alpha), borderWidth: hasPoc ? 1.0 : 0.0, borderColor: hasPoc ? color.rgb(240, 240, 240) : null, zIndex: 1)
+      }
+    }
+    let price = chart.forming.close ?? chart.close ?? poc
+    findGaps(total / float(n) * gapPct / 100.0, price * gapMinPct / 100.0)
+    drawGaps(price, at)
+  }
+}
+
+on clock.close {
+  refresh()
+}
+
+on chart.update {
+  if chart.isLast {
+    liveBar = chart.forming.time ?? chart.time
+    refresh()
+    let price = chart.forming.close ?? chart.close
+    let at = liveBar
+    if price != null && at != null && drawnFor >= 0.0 {
+      // redraw the nearest gaps when price has moved past one
+      if firstAbove(price) != drawnAbove { drawGaps(price, at) }
+      let above = firstAbove(price)
+      let inside = insideGap(price)
+      let below = (inside >= 0 ? inside : above) - 1
+      xPoc.plot(poc > 0.0 ? poc : null)
+      xVah.plot(vah > 0.0 ? vah : null)
+      xVal.plot(val > 0.0 ? val : null)
+      xAboveLo.plot(above < gLo.len ? gLo[above] : null)
+      xAboveHi.plot(above < gLo.len ? gHi[above] : null)
+      xBelowLo.plot(below >= 0 ? gLo[below] : null)
+      xBelowHi.plot(below >= 0 ? gHi[below] : null)
+      xInsideLo.plot(inside >= 0 ? gLo[inside] : null)
+      xInsideHi.plot(inside >= 0 ? gHi[inside] : null)
+    }
+  }
+}
