@@ -1,0 +1,24 @@
+# Deploy from the repo root:  fly launch --no-deploy --config watch/server/fly.toml  then
+#                             fly deploy --config watch/server/fly.toml
+# Sydney, because Binance and Bybit refuse US hosts.
+app = "swordfish-feed"
+primary_region = "syd"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    path = "/healthz"
+    interval = "60s"
+    timeout = "5s"
+    grace_period = "60s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

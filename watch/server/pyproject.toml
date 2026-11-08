@@ -1,0 +1,10 @@
+[project]
+name = "swordfish-feed"
+version = "1.0.0"
+description = "JSON feed of the Swordfish numbers for the Apple Watch complications"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "../../validation"]
