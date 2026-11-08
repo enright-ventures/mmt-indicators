@@ -1,0 +1,61 @@
+# Generate the Xcode project:  brew install xcodegen && xcodegen generate
+name: SwordfishWatch
+options:
+  bundleIdPrefix: ventures.enright
+  deploymentTarget:
+    watchOS: "10.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Your Apple developer team ID (Xcode > Settings > Accounts), or set it in Xcode.
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    # The deployed feed, e.g. https://swordfish-feed.fly.dev/v1/snapshot (can also be changed in the app).
+    SWORDFISH_FEED_URL: ""
+targets:
+  SwordfishWatch:
+    type: application
+    platform: watchOS
+    sources: [App, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ventures.enright.swordfish.watchkitapp
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Swordfish
+        WKApplication: true
+        WKWatchOnly: true
+        SwordfishFeedURL: $(SWORDFISH_FEED_URL)
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    entitlements:
+      path: App/SwordfishWatch.entitlements
+      properties:
+        com.apple.security.application-groups: [group.ventures.enright.swordfish]
+    dependencies:
+      - target: SwordfishComplications
+  SwordfishComplications:
+    type: app-extension
+    platform: watchOS
+    sources: [Complications, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ventures.enright.swordfish.watchkitapp.complications
+    info:
+      path: Complications/Info.plist
+      properties:
+        CFBundleDisplayName: Swordfish
+        SwordfishFeedURL: $(SWORDFISH_FEED_URL)
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Complications/SwordfishComplications.entitlements
+      properties:
+        com.apple.security.application-groups: [group.ventures.enright.swordfish]

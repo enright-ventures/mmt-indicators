@@ -14,6 +14,7 @@ The full reference, with a visual key for every line and marker, is [`docs/sword
 | [`indicators/swordfish/`](indicators/swordfish) | The seven Swordfish indicators (below) |
 | [`tools/`](tools) | TradingView watchlist importer and the source of the "Import to MMT" Mac app |
 | [`docs/swordfish-guide.html`](docs/swordfish-guide.html) | The guide: what each indicator draws, how to read it, settings, data and checks |
+| [`watch/`](watch) | Apple Watch complications for the Modular Ultra face and the feed server behind them |
 | [`validation/`](validation) | Reference implementations, cross-checks and backtests, with results in [`validation/README.md`](validation/README.md) |
 
 ## The Swordfish indicators
