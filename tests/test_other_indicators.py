@@ -265,3 +265,35 @@ def test_a_buffered_minute_is_kept_until_its_own_snapshot_arrives():
     assert sorted(out["results"][2]) == [[100, 150, 11 * 125], [200, 250, -100 * 225]]
     assert sorted(out["results"][4]) == [[100, 150, 11 * 125], [200, 250, -100 * 225]]
     assert out["read"] == {"liveGot": 3, "liveWant": 3}
+
+
+# Bar length: one scale across candles (default) or each candle's own largest row.
+
+ROW = """const cells = [];
+ladder = {cell: (lo, hi, weight, color, border, align, time) => cells.push({weight, border})};
+color = {withAlpha: (c, a) => c, rgb: () => 'clear'};
+align = {left: 'left'};
+function light(c) { return 'outline'; }
+function bar(usd, biggest, strongest) { cells.length = 0; row(0, 1, usd, 1000, biggest, strongest, 0); return cells[1]; }"""
+
+
+def ladder_row(by_recent, usd, biggest, strongest=False):
+    spec = {"blocks": ["fn row("], "stubs": [ROW],
+            "context": {"byRecent": by_recent, "colorAt": 2.0, "showNumbers": False, "buyColor": "buy", "sellColor": "sell"},
+            "calls": [{"fn": "bar", "args": [usd, biggest, strongest]}]}
+    return run("swordfish-delta-heat.m5", spec)["results"][0]
+
+
+def test_by_recent_bars_a_row_is_scaled_against_the_typical_largest_row():
+    # typical largest row 1,000, full length at 2x: a quiet candle's largest row (500) is a quarter length
+    assert ladder_row(True, 500, 500, True) == {"weight": 0.25, "border": None}
+    assert ladder_row(True, -1000, 4000) == {"weight": 0.5, "border": None}
+
+
+def test_by_recent_bars_a_row_beyond_the_cap_runs_full_length_and_is_outlined():
+    assert ladder_row(True, 6000, 6000, True) == {"weight": 1.0, "border": "outline"}
+
+
+def test_by_its_own_candle_the_largest_row_runs_full_length():
+    assert ladder_row(False, 500, 500, True) == {"weight": 1.0, "border": "outline"}
+    assert ladder_row(False, 250, 500) == {"weight": 0.5, "border": None}
