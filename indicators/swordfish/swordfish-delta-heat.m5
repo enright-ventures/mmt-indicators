@@ -1,10 +1,12 @@
 script "Swordfish Delta Heat"
 
 // A delta ladder on every bar. Each price row is a lane: a faint track the width of the bar, and on it a bar whose
-// LENGTH is the row's delta in dollars (aggressive buys minus sells, times the row's price) against the candle's own
-// largest row, which runs full length and is outlined. COLOUR strength compares across candles: it grows with the row's
-// size against a typical bar's largest row, so a quiet candle's biggest row is full length but pale. Blue for net
-// buying, red for net selling. The number sits across the whole lane so it stays legible however short the bar is. The
+// LENGTH is the row's delta in dollars (aggressive buys minus sells, times the row's price). By default length compares
+// across candles: full length is 2x (a setting) the typical largest row of recent bars, so a quiet candle's ladder stays
+// short and a heavy one's runs long; rows beyond that are capped at full length and outlined. A setting instead scales
+// each candle to its own largest row (full length, outlined). COLOUR strength always compares across candles, on the
+// same scale. Blue for net buying, red for net selling. The number sits across the whole lane so it stays legible
+// however short the bar is. The
 // chart's candle runs as a thin strip at the bar's left edge. Dollars, so the scale reads the same on any coin.
 // Closed bars come from MMT's per-bar volume snapshots (the last 250 bars). MMT has no forming bar snapshot, so the
 // live bar is built from the completed one-minute snapshots since it opened (exact per row, from any load time); the
@@ -14,7 +16,9 @@ script "Swordfish Delta Heat"
 // minutes were found. The minute in which the script starts misses the trades before it went live until that
 // minute's snapshot arrives.
 // When the auto row size changes, every bar with a snapshot is redrawn at the new size, so all ladders on screen share
-// one row height, and the colour scale is rebuilt from their largest rows at that size.
+// one row height, and the colour scale is rebuilt from their largest rows at that size. Each new bar's ladder uses the
+// typical largest row at the time; when that drifts by more than a quarter from the one the kept bars were drawn with,
+// they are all redrawn, so ladders side by side stay on one scale.
 // Live reconstruction is limited to whole-minute chart timeframes from 1m through 4h.
 
 input (
@@ -25,7 +29,8 @@ input (
   input.section(title: "Look")
   showNumbers = input.bool(true, title: "Delta numbers")
   memory = input.int(200, title: "Colour scale: bars remembered", min: 20, max: 2000, description: "The typical largest row = the average, over this many bars, of each bar's largest row delta.")
-  colorAt = input.float(2.0, title: "Full colour at x the typical largest row", min: 0.5, max: 10.0, description: "Bar length is relative to the candle's own largest row; colour strength compares rows across candles.")
+  lengthBy = input.select("Recent bars", title: "Bar length relative to", options: ["Recent bars", "Its own candle"], description: "Recent bars: one scale for every candle, so a row's length compares across candles. Its own candle: each candle's largest row runs full length.")
+  colorAt = input.float(2.0, title: "Full length and colour at x the typical largest row", min: 0.5, max: 10.0, description: "With length relative to its own candle, this sets colour only.")
   buyColor = input.color(color.rgb(92, 156, 255), title: "Buying")
   sellColor = input.color(color.rgb(255, 92, 102), title: "Selling")
 )
@@ -38,6 +43,7 @@ setup (
   source = venue == "Binance + Bybit perps" ? markets.agg("binancef", "bybitf") : venue == "Chart venue" ? context.exchange : markets.agg("binancef", "bybitf", "okxf")
   useChart = venue == "Chart venue"
   useAll = venue == "Perps: Binance, Bybit, OKX"
+  byRecent = lengthBy == "Recent bars"
 )
 
 data (
@@ -62,6 +68,8 @@ state (
   ranges = rolling<float>(100)
   step: float = 0.0
   lastDrawn: time? = null
+  // the typical largest row the kept bars were last all drawn with
+  drawnRef: float = 0.0
   // the live bar's minute snapshots found and minutes elapsed, for the title (a shortfall is marked, not hidden)
   liveGot: int = 0
   liveWant: int = 0
@@ -93,13 +101,16 @@ fn light(c: color) -> color {
   return color.gradient(0.5, 0.0, 1.0, c, color.rgb(255, 255, 255))
 }
 
-// One row of the ladder: the lane, the bar on it, then the number across the lane.
+// One row of the ladder: the lane, the bar on it, then the number across the lane. A row at full length is outlined:
+// the candle's largest row, or with length by recent bars, a row at or beyond the cap.
 fn row(lo: float, hi: float, usd: float, ref: float, biggest: float, strongest: bool, at: time?) {
   let side = usd >= 0.0 ? buyColor : sellColor
-  let share = math.min(1.0, math.abs(usd) / math.max(biggest, 0.000000001))
-  let strength = math.min(1.0, math.abs(usd) / (ref * colorAt))
+  let cap = math.max(ref * colorAt, 0.000000001)
+  let strength = math.min(1.0, math.abs(usd) / cap)
+  let share = byRecent ? strength : math.min(1.0, math.abs(usd) / math.max(biggest, 0.000000001))
+  let outline = byRecent ? math.abs(usd) >= cap : strongest
   ladder.cell(lo, hi, weight: 1.0, color: color.withAlpha(side, 16), align: align.left, time: at)
-  ladder.cell(lo, hi, weight: math.max(share, 0.03), color: color.withAlpha(side, 70 + (int(185.0 * strength) ?? 0)), borderColor: strongest ? light(side) : null, align: align.left, time: at)
+  ladder.cell(lo, hi, weight: math.max(share, 0.03), color: color.withAlpha(side, 70 + (int(185.0 * strength) ?? 0)), borderColor: outline ? light(side) : null, align: align.left, time: at)
   if showNumbers {
     ladder.cell(lo, hi, weight: 1.0, color: color.rgb(0, 0, 0, 0), value: usd, textColor: color.rgb(250, 251, 253), align: align.left, time: at)
   }
@@ -280,6 +291,16 @@ fn drawSnapshot(back: int, ref: float, draw: bool) -> float {
   return biggest
 }
 
+// Every kept bar redrawn against the current typical largest row.
+fn redrawAll() {
+  let ref = math.max(peaks.avg() ?? 0.0, 0.000000001)
+  let more = true
+  for back in 0..1000 {
+    if more && drawSnapshot(back, ref, true) < 0.0 { more = false }
+  }
+  drawnRef = ref
+}
+
 // Closed bars: the volume snapshot, once per bar.
 on chart.update {
   if chart.isLast {
@@ -317,8 +338,7 @@ on chart.close {
       }
       peaks.clear()
       for j in 0..resized.len { peaks.push(resized[resized.len - 1 - j] ?? 0.0) }
-      let ref = math.max(peaks.avg() ?? 0.0, 0.000000001)
-      for back in 0..resized.len { drawSnapshot(back, ref, true) }
+      redrawAll()
     }
   }
   if step > 0.0 {
@@ -350,6 +370,12 @@ on chart.close {
           }
         }
         lastDrawn = at
+        // the scale has drifted: redraw the kept bars so ladders side by side stay comparable
+        if drawnRef <= 0.0 {
+          drawnRef = ref
+        } else if ref > drawnRef * 1.25 || ref < drawnRef / 1.25 {
+          redrawAll()
+        }
       }
     }
   }
